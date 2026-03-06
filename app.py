@@ -1,0 +1,945 @@
+import json
+import uuid
+import os
+import csv
+import io
+import subprocess
+from datetime import datetime, timedelta
+from dateutil.relativedelta import relativedelta
+import requests as req
+from flask import Flask, render_template, jsonify, request
+
+app = Flask(__name__)
+PORTFOLIO_FILE = os.path.join(os.path.dirname(__file__), "portfolio.json")
+
+# In-memory price cache
+_price_cache = {}
+_historical_cache = {}
+_usd_inr_rate = None
+
+
+def load_portfolio():
+    with open(PORTFOLIO_FILE, "r") as f:
+        return json.load(f)
+
+
+def save_portfolio(data):
+    with open(PORTFOLIO_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def yahoo_fetch(url):
+    """Fetch URL via curl to avoid Yahoo's Python requests blocking."""
+    try:
+        result = subprocess.run(
+            ["curl", "-s", "-H", "User-Agent: Mozilla/5.0", url],
+            capture_output=True, text=True, timeout=15
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return json.loads(result.stdout)
+    except Exception as e:
+        print("yahoo_fetch error: {}".format(e))
+    return None
+
+
+def yahoo_chart(ticker, period="1d", interval="1d", range_start=None, range_end=None):
+    """Fetch data from Yahoo Finance v8 chart API."""
+    url = "https://query1.finance.yahoo.com/v8/finance/chart/{}?interval={}".format(ticker, interval)
+    if range_start and range_end:
+        p1 = int(datetime.strptime(range_start, "%Y-%m-%d").timestamp())
+        p2 = int(datetime.strptime(range_end, "%Y-%m-%d").timestamp())
+        url += "&period1={}&period2={}".format(p1, p2)
+    else:
+        url += "&range={}".format(period)
+    data = yahoo_fetch(url)
+    if data:
+        result = data.get("chart", {}).get("result")
+        if result and len(result) > 0:
+            return result[0]
+    return None
+
+
+def get_usd_inr_rate():
+    global _usd_inr_rate
+    if _usd_inr_rate:
+        return _usd_inr_rate
+    chart = yahoo_chart("USDINR=X", period="1d")
+    if chart:
+        close = chart.get("meta", {}).get("regularMarketPrice")
+        if close:
+            _usd_inr_rate = float(close)
+            return _usd_inr_rate
+    _usd_inr_rate = 83.0
+    return _usd_inr_rate
+
+
+def get_current_price(inv):
+    """Get current price for a market-traded investment. Returns price in INR."""
+    inv_id = inv["id"]
+    if inv_id in _price_cache:
+        return _price_cache[inv_id]
+
+    price = None
+    inv_type = inv["type"]
+
+    if inv_type in ("stock", "etf", "gold_etf"):
+        ticker = inv["ticker"]
+        chart = yahoo_chart(ticker, period="5d")
+        if chart:
+            price = chart.get("meta", {}).get("regularMarketPrice")
+            if price is None:
+                closes = chart.get("indicators", {}).get("quote", [{}])[0].get("close", [])
+                closes = [c for c in closes if c is not None]
+                if closes:
+                    price = closes[-1]
+
+    elif inv_type == "mutual_fund":
+        scheme_code = inv["scheme_code"]
+        try:
+            resp = req.get("https://api.mfapi.in/mf/{}/latest".format(scheme_code), timeout=10)
+            data = resp.json()
+            if "data" in data and len(data["data"]) > 0:
+                price = float(data["data"][0]["nav"])
+        except Exception as e:
+            print("Error fetching MF {}: {}".format(scheme_code, e))
+
+    elif inv_type == "crypto":
+        coin_id = inv["coin_id"]
+        try:
+            resp = req.get(
+                "https://api.coingecko.com/api/v3/simple/price?ids={}&vs_currencies=inr".format(coin_id),
+                timeout=10,
+            )
+            data = resp.json()
+            if coin_id in data:
+                price = float(data[coin_id]["inr"])
+        except Exception as e:
+            print("Error fetching crypto {}: {}".format(coin_id, e))
+
+    if price is not None:
+        price = float(price)
+        _price_cache[inv_id] = price
+    return price
+
+
+def calculate_fd_value(inv, as_of_date=None):
+    """Calculate FD value with compounding."""
+    principal = float(inv["principal"])
+    rate = float(inv["interest_rate"]) / 100
+    start = datetime.strptime(inv["start_date"], "%Y-%m-%d")
+    maturity = datetime.strptime(inv["maturity_date"], "%Y-%m-%d")
+    compounding = inv.get("compounding", "quarterly")
+
+    if as_of_date is None:
+        as_of_date = datetime.now()
+    elif isinstance(as_of_date, str):
+        as_of_date = datetime.strptime(as_of_date, "%Y-%m-%d")
+
+    if as_of_date < start:
+        return 0
+    if as_of_date > maturity:
+        return 0
+
+    n_map = {"monthly": 12, "quarterly": 4, "half_yearly": 2, "yearly": 1}
+    n = n_map.get(compounding, 4)
+    years = (as_of_date - start).days / 365.25
+    value = principal * ((1 + rate / n) ** (n * years))
+    return round(value, 2)
+
+
+def calculate_pf_value(inv, as_of_date=None):
+    """Calculate PF value with annual compounding on contributions."""
+    rate = float(inv["interest_rate"]) / 100
+    contributions = inv.get("contributions", [])
+
+    if as_of_date is None:
+        as_of_date = datetime.now()
+    elif isinstance(as_of_date, str):
+        as_of_date = datetime.strptime(as_of_date, "%Y-%m-%d")
+
+    total = 0
+    for c in contributions:
+        c_date = datetime.strptime(c["date"], "%Y-%m-%d")
+        if c_date > as_of_date:
+            continue
+        years = (as_of_date - c_date).days / 365.25
+        amount = float(c["amount"])
+        total += amount * ((1 + rate) ** years)
+    return round(total, 2)
+
+
+def get_historical_prices(inv, start_date, end_date=None):
+    """Get historical prices for market-traded investments."""
+    inv_id = inv["id"]
+    cache_key = "{}_{}".format(inv_id, start_date)
+    if cache_key in _historical_cache:
+        return _historical_cache[cache_key]
+
+    if end_date is None:
+        end_date = datetime.now().strftime("%Y-%m-%d")
+
+    prices = {}
+    inv_type = inv["type"]
+
+    if inv_type in ("stock", "etf", "gold_etf"):
+        chart = yahoo_chart(inv["ticker"], interval="1d", range_start=start_date, range_end=end_date)
+        if chart:
+            timestamps = chart.get("timestamp", [])
+            closes = chart.get("indicators", {}).get("quote", [{}])[0].get("close", [])
+            for i, ts in enumerate(timestamps):
+                if i < len(closes) and closes[i] is not None:
+                    d = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
+                    prices[d] = float(closes[i])
+
+    elif inv_type == "mutual_fund":
+        try:
+            resp = req.get("https://api.mfapi.in/mf/{}".format(inv["scheme_code"]), timeout=30)
+            data = resp.json()
+            if "data" in data:
+                for entry in data["data"]:
+                    d = datetime.strptime(entry["date"], "%d-%m-%Y").strftime("%Y-%m-%d")
+                    if start_date <= d <= end_date:
+                        prices[d] = float(entry["nav"])
+        except Exception as e:
+            print("Error fetching MF history: {}".format(e))
+
+    elif inv_type == "crypto":
+        try:
+            # CoinGecko free API limits to 365 days of history
+            earliest = datetime.strptime(start_date, "%Y-%m-%d")
+            max_start = datetime.now() - timedelta(days=364)
+            if earliest < max_start:
+                earliest = max_start
+            start_ts = int(earliest.timestamp())
+            end_ts = int(datetime.strptime(end_date, "%Y-%m-%d").timestamp())
+            resp = req.get(
+                "https://api.coingecko.com/api/v3/coins/{}/market_chart/range"
+                "?vs_currency=inr&from={}&to={}".format(inv["coin_id"], start_ts, end_ts),
+                timeout=30,
+            )
+            data = resp.json()
+            if "prices" in data:
+                for ts, price in data["prices"]:
+                    d = datetime.fromtimestamp(ts / 1000).strftime("%Y-%m-%d")
+                    prices[d] = float(price)
+        except Exception as e:
+            print("Error fetching crypto history: {}".format(e))
+
+    _historical_cache[cache_key] = prices
+    return prices
+
+
+def get_inflation_data():
+    """Fetch India CPI data from World Bank API. Returns dict of year -> CPI index.
+    Extrapolates missing recent years using last known year-over-year rate."""
+    try:
+        resp = req.get(
+            "https://api.worldbank.org/v2/country/IN/indicator/FP.CPI.TOTL?format=json&per_page=50&date=2000:2026",
+            timeout=10,
+        )
+        data = resp.json()
+        if len(data) > 1 and data[1]:
+            cpi = {}
+            for entry in data[1]:
+                if entry["value"] is not None:
+                    cpi[int(entry["date"])] = float(entry["value"])
+            # Extrapolate missing years up to current year using last known YoY rate
+            if cpi:
+                latest = max(cpi.keys())
+                current_year = datetime.now().year
+                if latest >= 2 and (latest - 1) in cpi:
+                    yoy_rate = cpi[latest] / cpi[latest - 1]
+                else:
+                    yoy_rate = 1.05  # ~5% default India inflation
+                for y in range(latest + 1, current_year + 2):
+                    cpi[y] = cpi[y - 1] * yoy_rate
+            return cpi
+    except Exception as e:
+        print("Error fetching CPI data: {}".format(e))
+    return None
+
+
+@app.route("/")
+def index():
+    return render_template("index.html")
+
+
+@app.route("/api/portfolio")
+def get_portfolio():
+    portfolio = load_portfolio()
+    investments = portfolio.get("investments", [])
+    results = []
+    total_value = 0
+    total_invested = 0
+
+    for inv in investments:
+        item = {**inv}
+        inv_type = inv["type"]
+
+        if inv_type == "fd":
+            current_value = calculate_fd_value(inv)
+            invested = float(inv["principal"]) if current_value > 0 else 0
+            item["current_value"] = current_value
+            item["invested"] = invested
+        elif inv_type == "pf":
+            current_value = calculate_pf_value(inv)
+            invested = sum(float(c["amount"]) for c in inv.get("contributions", []))
+            item["current_value"] = current_value
+            item["invested"] = invested
+        else:
+            price = get_current_price(inv)
+            transactions = inv.get("transactions", [])
+            total_qty = sum(float(t["quantity"]) for t in transactions)
+            invested = sum(float(t["quantity"]) * float(t["buy_price"]) for t in transactions)
+            current_value = (price * total_qty) if price else 0
+            item["current_price"] = price
+            item["total_quantity"] = round(total_qty, 2)
+            item["current_value"] = round(current_value, 2)
+            item["invested"] = round(invested, 2)
+
+        if item["current_value"]:
+            item["gain_loss"] = round(item["current_value"] - item["invested"], 2)
+            item["gain_loss_pct"] = round(
+                ((item["current_value"] - item["invested"]) / item["invested"] * 100) if item["invested"] else 0, 2
+            )
+        else:
+            item["gain_loss"] = 0
+            item["gain_loss_pct"] = 0
+
+        total_value += item["current_value"]
+        total_invested += item["invested"]
+        results.append(item)
+
+    return jsonify(
+        {
+            "investments": results,
+            "total_value": round(total_value, 2),
+            "total_invested": round(total_invested, 2),
+            "total_gain_loss": round(total_value - total_invested, 2),
+            "total_gain_loss_pct": round(
+                ((total_value - total_invested) / total_invested * 100) if total_invested else 0, 2
+            ),
+        }
+    )
+
+
+def _find_existing(investments, inv_type, data):
+    """Find an existing investment that matches the new one being added."""
+    for inv in investments:
+        if inv["type"] != inv_type:
+            continue
+        if inv_type in ("stock", "etf", "gold_etf") and inv.get("ticker") == data.get("ticker"):
+            return inv
+        if inv_type == "mutual_fund" and inv.get("scheme_code") == data.get("scheme_code"):
+            return inv
+        if inv_type == "crypto" and inv.get("coin_id") == data.get("coin_id"):
+            return inv
+        if inv_type == "pf" and inv.get("name") == data.get("name"):
+            return inv
+    return None
+
+
+@app.route("/api/investment", methods=["POST"])
+def add_investment():
+    data = request.json
+    portfolio = load_portfolio()
+    inv_type = data["type"]
+
+    # Check if this investment already exists — if so, append transaction
+    existing = _find_existing(portfolio.get("investments", []), inv_type, data)
+
+    if existing and inv_type in ("stock", "etf", "gold_etf", "mutual_fund", "crypto"):
+        if data.get("transaction"):
+            t = data["transaction"]
+            t["id"] = str(uuid.uuid4())[:8]
+            existing.setdefault("transactions", []).append(t)
+        save_portfolio(portfolio)
+        return jsonify({"status": "ok", "id": existing["id"]})
+
+    if existing and inv_type == "pf":
+        if data.get("contribution"):
+            c = data["contribution"]
+            c["id"] = str(uuid.uuid4())[:8]
+            existing.setdefault("contributions", []).append(c)
+        if data.get("interest_rate"):
+            existing["interest_rate"] = data["interest_rate"]
+        save_portfolio(portfolio)
+        return jsonify({"status": "ok", "id": existing["id"]})
+
+    # No existing match — create new investment
+    inv_id = str(uuid.uuid4())[:8]
+    investment = {"id": inv_id, "type": inv_type, "name": data["name"], "category": data.get("category", inv_type)}
+
+    if inv_type in ("stock", "etf", "gold_etf"):
+        investment["ticker"] = data["ticker"]
+        investment["transactions"] = []
+        if data.get("transaction"):
+            t = data["transaction"]
+            t["id"] = str(uuid.uuid4())[:8]
+            investment["transactions"].append(t)
+
+    elif inv_type == "mutual_fund":
+        investment["scheme_code"] = data["scheme_code"]
+        investment["transactions"] = []
+        if data.get("transaction"):
+            t = data["transaction"]
+            t["id"] = str(uuid.uuid4())[:8]
+            investment["transactions"].append(t)
+
+    elif inv_type == "crypto":
+        investment["coin_id"] = data["coin_id"]
+        investment["transactions"] = []
+        if data.get("transaction"):
+            t = data["transaction"]
+            t["id"] = str(uuid.uuid4())[:8]
+            investment["transactions"].append(t)
+
+    elif inv_type == "pf":
+        investment["interest_rate"] = data["interest_rate"]
+        investment["contributions"] = []
+        if data.get("contribution"):
+            c = data["contribution"]
+            c["id"] = str(uuid.uuid4())[:8]
+            investment["contributions"].append(c)
+
+    elif inv_type == "fd":
+        investment["principal"] = data["principal"]
+        investment["interest_rate"] = data["interest_rate"]
+        investment["start_date"] = data["start_date"]
+        investment["maturity_date"] = data["maturity_date"]
+        investment["compounding"] = data.get("compounding", "quarterly")
+
+    portfolio["investments"].append(investment)
+    save_portfolio(portfolio)
+    return jsonify({"status": "ok", "id": inv_id})
+
+
+@app.route("/api/investment/<inv_id>", methods=["DELETE"])
+def delete_investment(inv_id):
+    portfolio = load_portfolio()
+    portfolio["investments"] = [i for i in portfolio["investments"] if i["id"] != inv_id]
+    save_portfolio(portfolio)
+    _price_cache.pop(inv_id, None)
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/investment/<inv_id>", methods=["PUT"])
+def edit_investment(inv_id):
+    data = request.json
+    portfolio = load_portfolio()
+    for inv in portfolio["investments"]:
+        if inv["id"] == inv_id:
+            inv["name"] = data.get("name", inv["name"])
+
+            # Handle type change
+            new_type = data.get("type")
+            if new_type and new_type != inv["type"]:
+                inv["type"] = new_type
+                inv["category"] = data.get("category", new_type)
+
+            inv_type = inv["type"]
+
+            # Update type-specific fields
+            if inv_type in ("stock", "etf", "gold_etf"):
+                if data.get("ticker"):
+                    inv["ticker"] = data["ticker"]
+                inv.setdefault("transactions", [])
+            elif inv_type == "mutual_fund":
+                if data.get("scheme_code"):
+                    inv["scheme_code"] = data["scheme_code"]
+                inv.setdefault("transactions", [])
+            elif inv_type == "crypto":
+                if data.get("coin_id"):
+                    inv["coin_id"] = data["coin_id"]
+                inv.setdefault("transactions", [])
+            elif inv_type == "pf":
+                if data.get("interest_rate") is not None:
+                    inv["interest_rate"] = data["interest_rate"]
+                inv.setdefault("contributions", [])
+            elif inv_type == "fd":
+                for key in ("principal", "interest_rate", "start_date", "maturity_date", "compounding"):
+                    if data.get(key) is not None:
+                        inv[key] = data[key]
+            break
+    save_portfolio(portfolio)
+    _price_cache.pop(inv_id, None)
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/investment/<inv_id>/transaction", methods=["POST"])
+def add_transaction(inv_id):
+    data = request.json
+    portfolio = load_portfolio()
+    for inv in portfolio["investments"]:
+        if inv["id"] == inv_id:
+            t = {**data, "id": str(uuid.uuid4())[:8]}
+            if inv["type"] == "pf":
+                inv.setdefault("contributions", []).append(t)
+            else:
+                inv.setdefault("transactions", []).append(t)
+            break
+    save_portfolio(portfolio)
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/investment/<inv_id>/transaction/<txn_id>", methods=["DELETE"])
+def delete_transaction(inv_id, txn_id):
+    portfolio = load_portfolio()
+    for inv in portfolio["investments"]:
+        if inv["id"] == inv_id:
+            if inv["type"] == "pf":
+                inv["contributions"] = [c for c in inv.get("contributions", []) if c["id"] != txn_id]
+            else:
+                inv["transactions"] = [t for t in inv.get("transactions", []) if t["id"] != txn_id]
+            break
+    save_portfolio(portfolio)
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/investment/<inv_id>/transaction/<txn_id>", methods=["PUT"])
+def edit_transaction(inv_id, txn_id):
+    data = request.json
+    portfolio = load_portfolio()
+    for inv in portfolio["investments"]:
+        if inv["id"] == inv_id:
+            if inv["type"] == "pf":
+                for c in inv.get("contributions", []):
+                    if c["id"] == txn_id:
+                        c["date"] = data.get("date", c["date"])
+                        c["amount"] = data.get("amount", c["amount"])
+                        break
+            else:
+                for t in inv.get("transactions", []):
+                    if t["id"] == txn_id:
+                        t["date"] = data.get("date", t["date"])
+                        t["quantity"] = data.get("quantity", t["quantity"])
+                        t["buy_price"] = data.get("buy_price", t["buy_price"])
+                        break
+            break
+    save_portfolio(portfolio)
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/refresh", methods=["POST"])
+def refresh_prices():
+    global _price_cache, _historical_cache, _usd_inr_rate
+    _price_cache = {}
+    _historical_cache = {}
+    _usd_inr_rate = None
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/exchange-rate")
+def exchange_rate():
+    rate = get_usd_inr_rate()
+    return jsonify({"usd_inr": rate})
+
+
+@app.route("/api/historical")
+def historical():
+    view = request.args.get("view", "value")  # "value", "returns", or "current"
+    use_inflation = request.args.get("inflation", "false") == "true"
+
+    portfolio = load_portfolio()
+    investments = portfolio.get("investments", [])
+
+    if not investments:
+        return jsonify({"dates": [], "values": [], "invested": []})
+
+    now = datetime.now()
+
+    # Find earliest date across all investments
+    all_dates = []
+    for inv in investments:
+        if inv["type"] == "fd":
+            all_dates.append(inv["start_date"])
+        elif inv["type"] == "pf":
+            for c in inv.get("contributions", []):
+                all_dates.append(c["date"])
+        else:
+            for t in inv.get("transactions", []):
+                all_dates.append(t["date"])
+
+    if not all_dates:
+        return jsonify({"dates": [], "values": [], "invested": []})
+
+    start_date = min(all_dates)
+    end_date = now.strftime("%Y-%m-%d")
+
+    # Fetch historical prices for all market investments
+    hist_prices = {}
+    for inv in investments:
+        if inv["type"] in ("stock", "etf", "gold_etf", "mutual_fund", "crypto"):
+            hist_prices[inv["id"]] = get_historical_prices(inv, start_date, end_date)
+
+    # Generate weekly date points
+    current = datetime.strptime(start_date, "%Y-%m-%d")
+    end = datetime.strptime(end_date, "%Y-%m-%d")
+    date_points = []
+    while current <= end:
+        date_points.append(current.strftime("%Y-%m-%d"))
+        current += timedelta(days=7)
+    if date_points and date_points[-1] != end_date:
+        date_points.append(end_date)
+
+    # Get inflation data if needed
+    cpi_data = None
+    if use_inflation:
+        cpi_data = get_inflation_data()
+
+    values = []
+    invested_values = []
+    for dp in date_points:
+        total = 0
+        total_invested = 0
+        dp_dt = datetime.strptime(dp, "%Y-%m-%d")
+
+        for inv in investments:
+            inv_type = inv["type"]
+
+            if inv_type == "fd":
+                maturity = datetime.strptime(inv["maturity_date"], "%Y-%m-%d") if inv.get("maturity_date") else None
+                start = datetime.strptime(inv["start_date"], "%Y-%m-%d")
+                if view == "current":
+                    # Skip matured FDs in current holdings view
+                    if maturity and now > maturity:
+                        continue
+                    if dp_dt >= start:
+                        total += calculate_fd_value(inv, dp)
+                    else:
+                        # Extrapolate backwards: discount the principal
+                        principal = float(inv["principal"])
+                        rate = float(inv["interest_rate"]) / 100
+                        compounding = inv.get("compounding", "quarterly")
+                        n_map = {"monthly": 12, "quarterly": 4, "half_yearly": 2, "yearly": 1}
+                        n = n_map.get(compounding, 4)
+                        years_back = (start - dp_dt).days / 365.25
+                        total += principal / ((1 + rate / n) ** (n * years_back))
+                elif dp_dt >= start:
+                    fd_val = calculate_fd_value(inv, dp)
+                    total += fd_val
+                    if fd_val > 0:
+                        total_invested += float(inv["principal"])
+
+            elif inv_type == "pf":
+                total += calculate_pf_value(inv, dp)
+                total_invested += sum(float(c["amount"]) for c in inv.get("contributions", []) if c["date"] <= dp)
+
+            else:
+                transactions = inv.get("transactions", [])
+                prices = hist_prices.get(inv["id"], {})
+
+                # Find nearest price (look back up to 7 days)
+                price = None
+                for offset in range(7):
+                    check_date = (dp_dt - timedelta(days=offset)).strftime("%Y-%m-%d")
+                    if check_date in prices:
+                        price = prices[check_date]
+                        break
+
+                if price is None:
+                    continue
+
+                if view == "current":
+                    qty = sum(float(t["quantity"]) for t in transactions)
+                else:
+                    active_txns = [t for t in transactions if t["date"] <= dp]
+                    qty = sum(float(t["quantity"]) for t in active_txns)
+                    invested = sum(float(t["quantity"]) * float(t["buy_price"]) for t in active_txns)
+                    total_invested += invested
+
+                total += price * qty
+
+        # Apply inflation adjustment (interpolate monthly within years)
+        if use_inflation and cpi_data:
+            dp_year = dp_dt.year
+            now_year = now.year
+            now_month = now.month
+            # Interpolate CPI for the date point
+            cpi_y = cpi_data.get(dp_year, cpi_data.get(min(cpi_data.keys(), key=lambda y: abs(y - dp_year))))
+            cpi_y_next = cpi_data.get(dp_year + 1, cpi_y * 1.05)
+            frac = (dp_dt.month - 1) / 12.0
+            dp_cpi = cpi_y + (cpi_y_next - cpi_y) * frac
+            # Interpolate CPI for now
+            now_cpi_y = cpi_data.get(now_year, cpi_data.get(max(cpi_data.keys())))
+            now_cpi_next = cpi_data.get(now_year + 1, now_cpi_y * 1.05)
+            now_frac = (now_month - 1) / 12.0
+            now_cpi = now_cpi_y + (now_cpi_next - now_cpi_y) * now_frac
+            if dp_cpi:
+                factor = now_cpi / dp_cpi
+                total = total * factor
+                total_invested = total_invested * factor
+
+        values.append(round(total, 2))
+        invested_values.append(round(total_invested, 2))
+
+    return jsonify({"dates": date_points, "values": values, "invested": invested_values})
+
+
+@app.route("/api/search/stock")
+def search_stock():
+    q = request.args.get("q", "")
+    if len(q) < 2:
+        return jsonify([])
+    try:
+        url = "https://query1.finance.yahoo.com/v1/finance/search?q={}&quotesCount=10&newsCount=0".format(q)
+        data = yahoo_fetch(url)
+        if not data:
+            return jsonify([])
+        quotes = data.get("quotes", [])
+        results = []
+        for quote in quotes:
+            exch = quote.get("exchange", "")
+            symbol = quote.get("symbol", "")
+            # Filter to NSE/BSE Indian stocks
+            if exch in ("NSI", "NSE", "BSE", "BOM") or symbol.endswith(".NS") or symbol.endswith(".BO"):
+                exchange_label = "NSE" if (exch in ("NSI", "NSE") or symbol.endswith(".NS")) else "BSE"
+                results.append({
+                    "ticker": symbol,
+                    "name": quote.get("longname") or quote.get("shortname") or symbol,
+                    "exchange": exchange_label,
+                })
+        return jsonify(results)
+    except Exception as e:
+        print("Stock search error: {}".format(e))
+        return jsonify([])
+
+
+@app.route("/api/search/mf")
+def search_mf():
+    q = request.args.get("q", "")
+    if len(q) < 3:
+        return jsonify([])
+    try:
+        resp = req.get("https://api.mfapi.in/mf/search?q={}".format(q), timeout=10)
+        data = resp.json()
+        return jsonify(data[:20] if isinstance(data, list) else [])
+    except Exception:
+        return jsonify([])
+
+
+@app.route("/api/search/crypto")
+def search_crypto():
+    q = request.args.get("q", "")
+    if len(q) < 2:
+        return jsonify([])
+    try:
+        resp = req.get(
+            "https://api.coingecko.com/api/v3/search?query={}".format(q),
+            timeout=10,
+        )
+        data = resp.json()
+        coins = data.get("coins", [])[:10]
+        return jsonify([{"id": c["id"], "name": c["name"], "symbol": c["symbol"]} for c in coins])
+    except Exception:
+        return jsonify([])
+
+
+# Known ETF and Gold ETF symbols for auto-classification
+GOLD_ETF_SYMBOLS = {"GOLDBEES", "GOLDCASE", "GOLDETF", "GOLDSHARE", "BSLGOLDETF",
+                    "HABORETF", "AXISGOLD", "ABORETF", "IDBIGOLD", "KOTAKGOLD",
+                    "LICNETFGSC", "QGOLDHALF", "SBISGOLD", "TATAGOLD"}
+ETF_KEYWORDS = {"BEES", "ETF", "NIFTY", "JUNIOR", "SENSEX", "LIQUIDETF", "LIQUID"}
+
+_amfi_cache = None
+
+
+def fetch_amfi_data():
+    """Fetch AMFI scheme data and build ISIN -> scheme_code mapping."""
+    global _amfi_cache
+    if _amfi_cache is not None:
+        return _amfi_cache
+    try:
+        resp = req.get("https://www.amfiindia.com/spages/NAVAll.txt", timeout=30)
+        lines = resp.text.strip().split("\n")
+        isin_map = {}
+        for line in lines:
+            parts = line.split(";")
+            if len(parts) >= 5:
+                try:
+                    scheme_code = parts[0].strip()
+                    int(scheme_code)  # verify it's numeric
+                    isin1 = parts[1].strip()
+                    isin2 = parts[2].strip()
+                    scheme_name = parts[3].strip()
+                    if isin1:
+                        isin_map[isin1] = {"scheme_code": scheme_code, "name": scheme_name}
+                    if isin2:
+                        isin_map[isin2] = {"scheme_code": scheme_code, "name": scheme_name}
+                except ValueError:
+                    continue
+        _amfi_cache = isin_map
+        return isin_map
+    except Exception as e:
+        print("Error fetching AMFI data: {}".format(e))
+        return {}
+
+
+def classify_eq_symbol(symbol):
+    """Classify an equity symbol as stock, etf, or gold_etf."""
+    sym_upper = symbol.upper()
+    if sym_upper in GOLD_ETF_SYMBOLS:
+        return "gold_etf"
+    for kw in ETF_KEYWORDS:
+        if kw in sym_upper:
+            return "etf"
+    return "stock"
+
+
+@app.route("/api/import", methods=["POST"])
+def import_csv():
+    if "file" not in request.files:
+        return jsonify({"status": "error", "message": "No file uploaded"}), 400
+
+    file = request.files["file"]
+    content = file.read().decode("utf-8")
+    reader = csv.DictReader(io.StringIO(content))
+
+    portfolio = load_portfolio()
+    investments = portfolio.get("investments", [])
+
+    # Build set of existing trade_ids for duplicate detection
+    existing_trade_ids = set()
+    for inv in investments:
+        for t in inv.get("transactions", []):
+            if t.get("trade_id"):
+                existing_trade_ids.add(t["trade_id"])
+
+    # Fetch AMFI data for MF ISIN lookup
+    amfi_data = None
+    # Cache for EQ symbol -> full name lookups
+    eq_name_cache = {}
+    imported_count = 0
+    skipped_count = 0
+
+    for row in reader:
+        segment = row.get("segment", "").strip()
+        trade_type = row.get("trade_type", "").strip().lower()
+        symbol = row.get("symbol", "").strip()
+        isin = row.get("isin", "").strip()
+        trade_date = row.get("trade_date", "").strip()
+        quantity = row.get("quantity", "0").strip()
+        price = row.get("price", "0").strip()
+        trade_id = row.get("trade_id", "").strip()
+
+        # Skip duplicates
+        if trade_id and trade_id in existing_trade_ids:
+            skipped_count += 1
+            continue
+
+        # Parse date (handle YYYY-MM-DD format)
+        try:
+            date_str = datetime.strptime(trade_date, "%Y-%m-%d").strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+
+        # Make quantity negative for sells
+        qty_float = float(quantity)
+        if trade_type == "sell":
+            qty_float = -abs(qty_float)
+
+        txn = {
+            "id": str(uuid.uuid4())[:8],
+            "date": date_str,
+            "quantity": str(round(qty_float, 2)),
+            "buy_price": str(round(float(price), 2)),
+        }
+        if trade_id:
+            txn["trade_id"] = trade_id
+            existing_trade_ids.add(trade_id)
+
+        if segment == "EQ":
+            inv_type = classify_eq_symbol(symbol)
+            exchange = row.get("exchange", "NSE").strip()
+            suffix = ".BO" if exchange == "BSE" else ".NS"
+            ticker = "{}{}".format(symbol, suffix)
+
+            # Find existing investment with same ticker
+            existing = None
+            for inv in investments:
+                if inv.get("ticker") == ticker and inv["type"] == inv_type:
+                    existing = inv
+                    break
+
+            if existing:
+                existing["transactions"].append(txn)
+            else:
+                # Look up full name from Yahoo
+                if ticker not in eq_name_cache:
+                    full_name = symbol
+                    chart = yahoo_chart(ticker, period="1d")
+                    if chart:
+                        meta = chart.get("meta", {})
+                        full_name = meta.get("longName") or meta.get("shortName") or symbol
+                    eq_name_cache[ticker] = full_name
+                display_name = eq_name_cache[ticker]
+
+                investments.append({
+                    "id": str(uuid.uuid4())[:8],
+                    "type": inv_type,
+                    "name": display_name,
+                    "category": inv_type,
+                    "ticker": ticker,
+                    "transactions": [txn],
+                })
+            imported_count += 1
+
+        elif segment == "MF":
+            if amfi_data is None:
+                amfi_data = fetch_amfi_data()
+
+            scheme_info = amfi_data.get(isin)
+            if not scheme_info:
+                scheme_code = ""
+                scheme_name = symbol
+            else:
+                scheme_code = scheme_info["scheme_code"]
+                scheme_name = scheme_info["name"]
+
+            # Find existing investment with same scheme_code or ISIN
+            existing = None
+            for inv in investments:
+                if inv["type"] == "mutual_fund":
+                    if scheme_code and inv.get("scheme_code") == scheme_code:
+                        existing = inv
+                        break
+                    if inv.get("isin") == isin:
+                        existing = inv
+                        break
+
+            if existing:
+                existing["transactions"].append(txn)
+            else:
+                investments.append({
+                    "id": str(uuid.uuid4())[:8],
+                    "type": "mutual_fund",
+                    "name": scheme_name,
+                    "category": "mutual_fund",
+                    "scheme_code": scheme_code,
+                    "isin": isin,
+                    "transactions": [txn],
+                })
+            imported_count += 1
+
+    portfolio["investments"] = investments
+    save_portfolio(portfolio)
+
+    # Clear caches
+    global _price_cache, _historical_cache
+    _price_cache = {}
+    _historical_cache = {}
+
+    msg = "Imported {} trades".format(imported_count)
+    if skipped_count:
+        msg += ", skipped {} duplicates".format(skipped_count)
+
+    return jsonify({
+        "status": "ok",
+        "imported": imported_count,
+        "skipped": skipped_count,
+        "message": msg,
+    })
+
+
+if __name__ == "__main__":
+    app.run(debug=True, port=5050)

@@ -1,0 +1,1242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Portfolio Tracker</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr/dist/themes/dark.css">
+<script src="https://cdn.jsdelivr.net/npm/flatpickr"></script>
+<style>
+  :root {
+    --bg: #0f1117; --surface: #1a1d27; --surface2: #252836;
+    --border: #2e3348; --text: #e4e4e7; --muted: #9ca3af;
+    --green: #22c55e; --red: #ef4444; --blue: #3b82f6;
+    --purple: #a855f7; --orange: #f97316; --cyan: #06b6d4;
+    --yellow: #eab308; --pink: #ec4899;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+  .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+  header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; flex-wrap: wrap; gap: 12px; }
+  header h1 { font-size: 1.5rem; font-weight: 700; }
+  .header-actions { display: flex; gap: 8px; align-items: center; }
+
+  .btn { padding: 8px 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); cursor: pointer; font-size: 0.85rem; transition: all 0.2s; }
+  .btn:hover { background: var(--surface2); border-color: var(--blue); }
+  .btn-primary { background: var(--blue); border-color: var(--blue); }
+  .btn-primary:hover { opacity: 0.9; }
+  .btn-danger { border-color: var(--red); color: var(--red); }
+  .btn-danger:hover { background: var(--red); color: white; }
+  .btn-sm { padding: 4px 10px; font-size: 0.75rem; }
+
+  .summary-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+  .card-label { font-size: 0.8rem; color: var(--muted); margin-bottom: 4px; }
+  .card-value { font-size: 1.6rem; font-weight: 700; }
+  .card-sub { font-size: 0.85rem; margin-top: 4px; }
+  .positive { color: var(--green); }
+  .negative { color: var(--red); }
+
+  .charts-grid { display: grid; grid-template-columns: 1fr 2fr; gap: 16px; margin-bottom: 24px; }
+  @media (max-width: 900px) { .charts-grid { grid-template-columns: 1fr; } }
+  .chart-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+  .chart-card h3 { font-size: 0.95rem; margin-bottom: 12px; color: var(--muted); }
+  .chart-controls { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+  .toggle-group { display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .toggle-btn { padding: 6px 14px; background: var(--surface); color: var(--muted); border: none; cursor: pointer; font-size: 0.8rem; }
+  .toggle-btn.active { background: var(--blue); color: white; }
+
+  .investments-section h2 { font-size: 1.1rem; margin-bottom: 12px; }
+  .inv-table { width: 100%; border-collapse: collapse; }
+  .inv-table th { text-align: left; padding: 10px 12px; font-size: 0.75rem; color: var(--muted); text-transform: uppercase; border-bottom: 1px solid var(--border); }
+  .inv-table td { padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 0.85rem; }
+  .inv-table tr:hover { background: var(--surface2); }
+  .type-badge { padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; text-transform: uppercase; font-weight: 600; }
+  .type-stock { background: rgba(59,130,246,0.15); color: var(--blue); }
+  .type-etf { background: rgba(168,85,247,0.15); color: var(--purple); }
+  .type-gold_etf { background: rgba(234,179,8,0.15); color: var(--yellow); }
+  .type-mutual_fund { background: rgba(6,182,212,0.15); color: var(--cyan); }
+  .type-crypto { background: rgba(249,115,22,0.15); color: var(--orange); }
+  .type-pf { background: rgba(34,197,94,0.15); color: var(--green); }
+  .type-fd { background: rgba(236,72,153,0.15); color: var(--pink); }
+
+  .expandable { cursor: pointer; }
+  .txn-row { display: none; }
+  .txn-row.show { display: table-row; }
+  .txn-row td { padding-left: 40px; color: var(--muted); font-size: 0.8rem; background: var(--surface2); }
+
+  /* Modal */
+  .modal-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); z-index: 100; justify-content: center; align-items: center; }
+  .modal-overlay.show { display: flex; }
+  .modal { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 24px; width: 90%; max-width: 520px; max-height: 85vh; overflow-y: auto; }
+  .modal h2 { margin-bottom: 16px; font-size: 1.1rem; }
+  .form-group { margin-bottom: 14px; }
+  .form-group label { display: block; font-size: 0.8rem; color: var(--muted); margin-bottom: 4px; }
+  .form-group input, .form-group select { width: 100%; padding: 10px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: 0.9rem; }
+  .form-group input:focus, .form-group select:focus { outline: none; border-color: var(--blue); }
+  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .search-results { max-height: 150px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; margin-top: 4px; }
+  .search-results div { padding: 8px 12px; cursor: pointer; font-size: 0.85rem; border-bottom: 1px solid var(--border); }
+  .search-results div:hover { background: var(--surface2); }
+  .search-results div small { color: var(--muted); }
+  .form-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+
+  .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--border); border-top-color: var(--blue); border-radius: 50%; animation: spin 0.6s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loading-overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(15,17,23,0.7); display: flex; align-items: center; justify-content: center; border-radius: 12px; }
+
+  .empty-state { text-align: center; padding: 40px; color: var(--muted); }
+  .currency-toggle { font-size: 0.85rem; color: var(--muted); }
+
+  /* Flatpickr overrides to match theme */
+  .flatpickr-calendar {
+    background: var(--surface) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: 12px !important;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4) !important;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+  }
+  .flatpickr-months .flatpickr-month,
+  .flatpickr-current-month .flatpickr-monthDropdown-months { background: var(--surface) !important; color: var(--text) !important; }
+  .flatpickr-current-month input.cur-year { color: var(--text) !important; }
+  .flatpickr-months .flatpickr-prev-month, .flatpickr-months .flatpickr-next-month { fill: var(--muted) !important; color: var(--muted) !important; }
+  .flatpickr-months .flatpickr-prev-month:hover, .flatpickr-months .flatpickr-next-month:hover { fill: var(--text) !important; color: var(--text) !important; }
+  span.flatpickr-weekday { color: var(--muted) !important; background: var(--surface) !important; font-weight: 600; }
+  .flatpickr-day { color: var(--text) !important; border-radius: 6px !important; }
+  .flatpickr-day:hover { background: var(--surface2) !important; border-color: var(--border) !important; }
+  .flatpickr-day.selected { background: var(--blue) !important; border-color: var(--blue) !important; color: white !important; }
+  .flatpickr-day.today { border-color: var(--blue) !important; }
+  .flatpickr-day.prevMonthDay, .flatpickr-day.nextMonthDay { color: var(--border) !important; }
+  .flatpickr-day.disabled { color: var(--border) !important; }
+  .flatpickr-innerContainer { border-bottom: none !important; }
+  .flatpickr-rContainer { padding: 4px !important; }
+  .flatpickr-current-month { display: flex !important; align-items: center !important; gap: 4px !important; }
+  .flatpickr-current-month .flatpickr-monthDropdown-months,
+  .numInputWrapper { background: var(--bg) !important; border: 1px solid var(--border) !important; border-radius: 6px !important; color: var(--text) !important; padding: 2px 4px !important; }
+  .flatpickr-current-month .flatpickr-monthDropdown-months option { background: var(--surface) !important; color: var(--text) !important; }
+  .numInputWrapper input { color: var(--text) !important; }
+  .numInputWrapper span { border-color: var(--muted) !important; }
+  .numInputWrapper span:hover { background: var(--surface2) !important; }
+  .flatpickr-current-month input.cur-year { font-size: 0.9rem !important; }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1>Portfolio Tracker</h1>
+    <div class="header-actions">
+      <span class="currency-toggle">
+        <label><input type="radio" name="currency" value="INR" checked onchange="setCurrency('INR')"> INR</label>
+        <label><input type="radio" name="currency" value="USD" onchange="setCurrency('USD')"> USD</label>
+      </span>
+      <button class="btn" onclick="refreshPrices()" id="refreshBtn">Refresh Prices</button>
+      <button class="btn" onclick="openImportModal()">Import CSV</button>
+      <button class="btn btn-primary" onclick="openAddModal()">+ Add Investment</button>
+    </div>
+  </header>
+
+  <div class="summary-cards" id="summaryCards">
+    <div class="card"><div class="card-label">Total Value</div><div class="card-value" id="totalValue">--</div></div>
+    <div class="card"><div class="card-label">Total Invested</div><div class="card-value" id="totalInvested">--</div></div>
+    <div class="card"><div class="card-label">Total Gain/Loss</div><div class="card-value" id="totalGainLoss">--</div><div class="card-sub" id="totalGainLossPct"></div></div>
+  </div>
+
+  <div class="charts-grid">
+    <div class="chart-card">
+      <h3>Allocation Breakdown</h3>
+      <canvas id="pieChart"></canvas>
+    </div>
+    <div class="chart-card" style="position:relative;">
+      <h3>Portfolio History</h3>
+      <div class="chart-controls">
+        <div class="toggle-group">
+          <button class="toggle-btn active" onclick="setHistView('value', this)">Portfolio Value</button>
+          <button class="toggle-btn" onclick="setHistView('returns', this)">Returns %</button>
+          <button class="toggle-btn" onclick="setHistView('current', this)">Current Holdings</button>
+        </div>
+        <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;color:var(--muted);">
+          <input type="checkbox" id="inflationToggle" onchange="loadHistorical()"> Inflation Adjusted
+        </label>
+      </div>
+      <canvas id="lineChart"></canvas>
+      <div class="loading-overlay" id="histLoading" style="display:none;"><div class="spinner"></div></div>
+    </div>
+  </div>
+
+  <div class="investments-section">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+      <h2>Investments</h2>
+      <div class="toggle-group">
+        <button class="toggle-btn active" id="btnCurrent" onclick="setInvFilter('current', this)">Current</button>
+        <button class="toggle-btn" id="btnPast" onclick="setInvFilter('past', this)">Past</button>
+        <button class="toggle-btn" id="btnAll" onclick="setInvFilter('all', this)">All</button>
+      </div>
+    </div>
+    <div class="card" style="overflow-x:auto;">
+      <table class="inv-table" id="invTable">
+        <thead>
+          <tr>
+            <th>Name</th><th>Type</th><th>Qty / Principal</th><th>Invested</th>
+            <th>Current Value</th><th>Gain/Loss</th><th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="invBody"></tbody>
+      </table>
+      <div class="empty-state" id="emptyState" style="display:none;">No investments yet. Click "+ Add Investment" to get started.</div>
+    </div>
+  </div>
+</div>
+
+<!-- Add Investment Modal -->
+<div class="modal-overlay" id="addModal">
+  <div class="modal">
+    <h2 id="modalTitle">Add Investment</h2>
+    <div class="form-group">
+      <label>Investment Type</label>
+      <select id="invType" onchange="onTypeChange()">
+        <option value="stock">Stock (NSE/BSE)</option>
+        <option value="etf">ETF</option>
+        <option value="gold_etf">Gold ETF</option>
+        <option value="mutual_fund">Mutual Fund</option>
+        <option value="crypto">Cryptocurrency</option>
+        <option value="pf">Provident Fund (PF)</option>
+        <option value="fd">Fixed Deposit (FD)</option>
+      </select>
+    </div>
+
+    <!-- Market asset fields -->
+    <div id="marketFields">
+      <div class="form-group">
+        <label id="searchLabel">Search Ticker</label>
+        <input type="text" id="searchInput" placeholder="Type to search..." oninput="debounceSearch()">
+        <div class="search-results" id="searchResults" style="display:none;"></div>
+      </div>
+      <div class="form-group">
+        <label>Name</label>
+        <input type="text" id="assetName" placeholder="Asset name">
+      </div>
+      <input type="hidden" id="assetTicker">
+      <div class="form-row">
+        <div class="form-group"><label>Quantity</label><input type="number" id="txnQty" step="any" placeholder="0"></div>
+        <div class="form-group"><label>Buy Price (per unit)</label><input type="number" id="txnPrice" step="any" placeholder="0"></div>
+      </div>
+      <div class="form-group"><label>Date</label><input type="text" id="txnDate" class="datepicker" placeholder="Select date"></div>
+    </div>
+
+    <!-- PF fields -->
+    <div id="pfFields" style="display:none;">
+      <div class="form-group"><label>Name</label><input type="text" id="pfName" value="EPF" placeholder="EPF"></div>
+      <div class="form-group"><label>Interest Rate (% p.a.)</label><input type="number" id="pfRate" value="8.25" step="0.01"></div>
+      <div class="form-row">
+        <div class="form-group"><label>Contribution Amount</label><input type="number" id="pfAmount" step="any" placeholder="Monthly amount"></div>
+        <div class="form-group"><label>Date</label><input type="text" id="pfDate" class="datepicker" placeholder="Select date"></div>
+      </div>
+    </div>
+
+    <!-- FD fields -->
+    <div id="fdFields" style="display:none;">
+      <div class="form-group"><label>Name</label><input type="text" id="fdName" placeholder="e.g. SBI FD"></div>
+      <div class="form-group"><label>Principal</label><input type="number" id="fdPrincipal" step="any" placeholder="Amount"></div>
+      <div class="form-group"><label>Interest Rate (% p.a.)</label><input type="number" id="fdRate" step="0.01" placeholder="7.1"></div>
+      <div class="form-row">
+        <div class="form-group"><label>Start Date</label><input type="text" id="fdStart" class="datepicker" placeholder="Select date"></div>
+        <div class="form-group"><label>Maturity Date</label><input type="text" id="fdMaturity" class="datepicker" placeholder="Select date"></div>
+      </div>
+      <div class="form-group">
+        <label>Compounding</label>
+        <select id="fdCompounding">
+          <option value="monthly">Monthly</option>
+          <option value="quarterly" selected>Quarterly</option>
+          <option value="half_yearly">Half-Yearly</option>
+          <option value="yearly">Yearly</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="form-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="submitInvestment()" id="submitBtn">Add</button>
+    </div>
+  </div>
+</div>
+
+<!-- Add Transaction Modal -->
+<div class="modal-overlay" id="txnModal">
+  <div class="modal">
+    <h2 id="txnModalTitle">Add Transaction</h2>
+    <input type="hidden" id="txnInvId">
+    <input type="hidden" id="txnInvType">
+    <div id="txnMarketFields">
+      <div class="form-row">
+        <div class="form-group"><label>Quantity</label><input type="number" id="txnAddQty" step="any"></div>
+        <div class="form-group"><label>Buy Price (per unit)</label><input type="number" id="txnAddPrice" step="any"></div>
+      </div>
+      <div class="form-group"><label>Date</label><input type="text" id="txnAddDate" class="datepicker" placeholder="Select date"></div>
+    </div>
+    <div id="txnPfFields" style="display:none;">
+      <div class="form-row">
+        <div class="form-group"><label>Contribution Amount</label><input type="number" id="txnPfAmount" step="any"></div>
+        <div class="form-group"><label>Date</label><input type="text" id="txnPfDate" class="datepicker" placeholder="Select date"></div>
+      </div>
+    </div>
+    <div class="form-actions">
+      <button class="btn" onclick="closeTxnModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="submitTransaction()">Add</button>
+    </div>
+  </div>
+</div>
+
+<!-- Edit Transaction Modal -->
+<div class="modal-overlay" id="editTxnModal">
+  <div class="modal">
+    <h2 id="editTxnTitle">Edit Transaction</h2>
+    <input type="hidden" id="editTxnInvId">
+    <input type="hidden" id="editTxnId">
+    <input type="hidden" id="editTxnType">
+    <div id="editMarketFields">
+      <div class="form-row">
+        <div class="form-group"><label>Quantity</label><input type="number" id="editQty" step="any"></div>
+        <div class="form-group"><label>Buy Price (per unit)</label><input type="number" id="editPrice" step="any"></div>
+      </div>
+      <div class="form-group"><label>Date</label><input type="text" id="editDate" class="datepicker" placeholder="Select date"></div>
+    </div>
+    <div id="editPfFields" style="display:none;">
+      <div class="form-row">
+        <div class="form-group"><label>Contribution Amount</label><input type="number" id="editPfAmount" step="any"></div>
+        <div class="form-group"><label>Date</label><input type="text" id="editPfDate" class="datepicker" placeholder="Select date"></div>
+      </div>
+    </div>
+    <div class="form-actions">
+      <button class="btn" onclick="closeEditTxnModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="submitEditTransaction()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Edit Investment Modal -->
+<div class="modal-overlay" id="editInvModal">
+  <div class="modal">
+    <h2 id="editInvTitle">Edit Investment</h2>
+    <input type="hidden" id="editInvId">
+
+    <div class="form-group">
+      <label>Investment Type</label>
+      <select id="editInvType" onchange="onEditInvTypeChange()">
+        <option value="stock">Stock (NSE/BSE)</option>
+        <option value="etf">ETF</option>
+        <option value="gold_etf">Gold ETF</option>
+        <option value="mutual_fund">Mutual Fund</option>
+        <option value="crypto">Cryptocurrency</option>
+        <option value="pf">Provident Fund (PF)</option>
+        <option value="fd">Fixed Deposit (FD)</option>
+      </select>
+    </div>
+
+    <div class="form-group">
+      <label>Name</label>
+      <input type="text" id="editInvName">
+    </div>
+
+    <!-- Stock/ETF fields -->
+    <div id="editInvStockFields" style="display:none;">
+      <div class="form-group">
+        <label>Ticker</label>
+        <input type="text" id="editInvTicker">
+      </div>
+    </div>
+
+    <!-- Mutual Fund fields -->
+    <div id="editInvMfFields" style="display:none;">
+      <div class="form-group">
+        <label>Scheme Code</label>
+        <input type="text" id="editInvSchemeCode">
+      </div>
+    </div>
+
+    <!-- Crypto fields -->
+    <div id="editInvCryptoFields" style="display:none;">
+      <div class="form-group">
+        <label>Coin ID</label>
+        <input type="text" id="editInvCoinId">
+      </div>
+    </div>
+
+    <!-- PF fields -->
+    <div id="editInvPfFields" style="display:none;">
+      <div class="form-group">
+        <label>Interest Rate (% p.a.)</label>
+        <input type="number" id="editInvPfRate" step="0.01">
+      </div>
+    </div>
+
+    <!-- FD fields -->
+    <div id="editInvFdFields" style="display:none;">
+      <div class="form-group">
+        <label>Principal</label>
+        <input type="number" id="editInvFdPrincipal" step="any">
+      </div>
+      <div class="form-group">
+        <label>Interest Rate (% p.a.)</label>
+        <input type="number" id="editInvFdRate" step="0.01">
+      </div>
+      <div class="form-row">
+        <div class="form-group"><label>Start Date</label><input type="text" id="editInvFdStart" class="datepicker" placeholder="Select date"></div>
+        <div class="form-group"><label>Maturity Date</label><input type="text" id="editInvFdMaturity" class="datepicker" placeholder="Select date"></div>
+      </div>
+      <div class="form-group">
+        <label>Compounding</label>
+        <select id="editInvFdCompounding">
+          <option value="monthly">Monthly</option>
+          <option value="quarterly">Quarterly</option>
+          <option value="half_yearly">Half-Yearly</option>
+          <option value="yearly">Yearly</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="form-actions">
+      <button class="btn" onclick="closeEditInvModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="submitEditInvestment()">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- Import CSV Modal -->
+<div class="modal-overlay" id="importModal">
+  <div class="modal">
+    <h2>Import Zerodha Tradebook</h2>
+    <p style="font-size:0.85rem;color:var(--muted);margin-bottom:16px;">
+      Upload your Zerodha tradebook CSV files. You can upload multiple files at once (EQ and MF segments).
+      Trades will be merged with existing investments automatically.
+    </p>
+    <div class="form-group">
+      <label>Select CSV file(s)</label>
+      <input type="file" id="importFiles" accept=".csv" multiple style="padding:8px;">
+    </div>
+    <div id="importStatus" style="display:none;font-size:0.85rem;margin-bottom:12px;"></div>
+    <div class="form-actions">
+      <button class="btn" onclick="closeImportModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="submitImport()" id="importBtn">Import</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let portfolioData = null;
+let currency = 'INR';
+let usdRate = 83;
+let pieChart = null;
+let lineChart = null;
+let histView = 'value';
+let invFilter = 'current';
+let searchTimeout = null;
+
+const CATEGORY_COLORS = {
+  stock: '#3b82f6', etf: '#a855f7', gold_etf: '#eab308',
+  mutual_fund: '#06b6d4', crypto: '#f97316', pf: '#22c55e', fd: '#ec4899'
+};
+const CATEGORY_LABELS = {
+  stock: 'Stocks', etf: 'ETFs', gold_etf: 'Gold ETFs',
+  mutual_fund: 'Mutual Funds', crypto: 'Crypto', pf: 'Provident Fund', fd: 'Fixed Deposits'
+};
+
+function fmt(val) {
+  if (currency === 'USD') val = val / usdRate;
+  const sym = currency === 'INR' ? '\u20B9' : '$';
+  return sym + val.toLocaleString('en-IN', { maximumFractionDigits: 0 });
+}
+
+function fmtDetailed(val) {
+  if (currency === 'USD') val = val / usdRate;
+  const sym = currency === 'INR' ? '\u20B9' : '$';
+  return sym + val.toLocaleString('en-IN', { maximumFractionDigits: 2 });
+}
+
+async function setCurrency(c) {
+  currency = c;
+  if (c === 'USD') {
+    const resp = await fetch('/api/exchange-rate');
+    const data = await resp.json();
+    usdRate = data.usd_inr;
+  }
+  renderPortfolio();
+}
+
+async function loadPortfolio() {
+  const resp = await fetch('/api/portfolio');
+  portfolioData = await resp.json();
+  renderPortfolio();
+}
+
+function renderPortfolio() {
+  if (!portfolioData) return;
+  const d = portfolioData;
+
+  document.getElementById('totalValue').textContent = fmt(d.total_value);
+  document.getElementById('totalInvested').textContent = fmt(d.total_invested);
+
+  const glEl = document.getElementById('totalGainLoss');
+  glEl.textContent = fmt(d.total_gain_loss);
+  glEl.className = 'card-value ' + (d.total_gain_loss >= 0 ? 'positive' : 'negative');
+  document.getElementById('totalGainLossPct').textContent =
+    (d.total_gain_loss >= 0 ? '+' : '') + d.total_gain_loss_pct + '%';
+  document.getElementById('totalGainLossPct').className =
+    'card-sub ' + (d.total_gain_loss >= 0 ? 'positive' : 'negative');
+
+  renderPieChart(d.investments);
+  renderTable(d.investments);
+}
+
+function renderPieChart(investments) {
+  const catTotals = {};
+  for (const inv of investments) {
+    const cat = inv.category || inv.type;
+    catTotals[cat] = (catTotals[cat] || 0) + (inv.current_value || 0);
+  }
+
+  const labels = [], data = [], colors = [];
+  for (const [cat, val] of Object.entries(catTotals)) {
+    if (val <= 0) continue;
+    labels.push(CATEGORY_LABELS[cat] || cat);
+    data.push(currency === 'USD' ? val / usdRate : val);
+    colors.push(CATEGORY_COLORS[cat] || '#666');
+  }
+
+  const ctx = document.getElementById('pieChart').getContext('2d');
+  if (pieChart) pieChart.destroy();
+  if (data.length === 0) { return; }
+  pieChart = new Chart(ctx, {
+    type: 'doughnut',
+    data: { labels, datasets: [{ data, backgroundColor: colors, borderWidth: 0 }] },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { position: 'bottom', labels: { color: '#9ca3af', font: { size: 11 } } },
+        tooltip: {
+          callbacks: {
+            label: function(ctx) {
+              const sym = currency === 'INR' ? '\u20B9' : '$';
+              const total = ctx.dataset.data.reduce((a,b) => a+b, 0);
+              const pct = ((ctx.parsed / total) * 100).toFixed(1);
+              return ctx.label + ': ' + sym + ctx.parsed.toLocaleString('en-IN', {maximumFractionDigits:0}) + ' (' + pct + '%)';
+            }
+          }
+        }
+      }
+    }
+  });
+}
+
+function isCurrentInvestment(inv) {
+  if (inv.type === 'fd') {
+    // FD is past if maturity date has passed
+    return !inv.maturity_date || inv.maturity_date >= new Date().toISOString().slice(0, 10);
+  }
+  if (inv.type === 'pf') {
+    // PF is current if it has contributions
+    return (inv.contributions || []).length > 0;
+  }
+  // Market assets: current if total quantity > 0
+  return (inv.total_quantity || 0) > 0.001;
+}
+
+function setInvFilter(filter, btn) {
+  invFilter = filter;
+  document.querySelectorAll('.investments-section .toggle-btn').forEach(function(b) { b.classList.remove('active'); });
+  btn.classList.add('active');
+  renderPortfolio();
+}
+
+function renderTable(investments) {
+  const tbody = document.getElementById('invBody');
+  const empty = document.getElementById('emptyState');
+
+  // Filter investments based on selected view
+  const filtered = investments.filter(function(inv) {
+    if (invFilter === 'all') return true;
+    var isCurrent = isCurrentInvestment(inv);
+    return invFilter === 'current' ? isCurrent : !isCurrent;
+  });
+
+  if (filtered.length === 0) {
+    tbody.innerHTML = '';
+    empty.style.display = 'block';
+    empty.textContent = invFilter === 'past' ? 'No past investments.' :
+                        invFilter === 'current' ? 'No current investments.' :
+                        'No investments yet. Click "+ Add Investment" to get started.';
+    return;
+  }
+  empty.style.display = 'none';
+
+  let html = '';
+  for (const inv of filtered) {
+    const isMarket = !['pf', 'fd'].includes(inv.type);
+    const gl = inv.gain_loss || 0;
+    const glClass = gl >= 0 ? 'positive' : 'negative';
+    const glPct = inv.gain_loss_pct || 0;
+    const qtyLabel = inv.type === 'fd' ? fmtDetailed(inv.principal) :
+                     inv.type === 'pf' ? (inv.contributions||[]).length + ' contributions' :
+                     parseFloat(inv.total_quantity || 0).toFixed(2);
+
+    html += `<tr class="expandable" onclick="toggleTxns('${inv.id}')">
+      <td><strong>${inv.name}</strong></td>
+      <td><span class="type-badge type-${inv.type}">${(CATEGORY_LABELS[inv.type]||inv.type)}</span></td>
+      <td>${qtyLabel}</td>
+      <td>${fmtDetailed(inv.invested)}</td>
+      <td>${fmtDetailed(inv.current_value)}</td>
+      <td class="${glClass}">${fmtDetailed(gl)} (${glPct >= 0 ? '+' : ''}${glPct}%)</td>
+      <td>
+        ${inv.type !== 'fd' ? `<button class="btn btn-sm" onclick="event.stopPropagation();openTxnModal('${inv.id}','${inv.type}','${inv.name}')">+ Add</button>` : ''}
+        <button class="btn btn-sm" onclick="event.stopPropagation();openEditInvModal('${inv.id}')">Edit</button>
+        <button class="btn btn-sm btn-danger" onclick="event.stopPropagation();deleteInvestment('${inv.id}')">Del</button>
+      </td>
+    </tr>`;
+
+    // Transaction sub-rows (newest first)
+    if (inv.type === 'pf') {
+      for (const c of (inv.contributions || []).slice().sort((a,b) => b.date.localeCompare(a.date))) {
+        html += `<tr class="txn-row" data-parent="${inv.id}">
+          <td colspan="5">${c.date} &mdash; ${fmtDetailed(parseFloat(c.amount).toFixed(2))}</td>
+          <td></td>
+          <td>
+            <button class="btn btn-sm" onclick="openEditTxnModal('${inv.id}','${c.id}','pf','${c.date}','','','${c.amount}')">Edit</button>
+            <button class="btn btn-sm btn-danger" onclick="deleteTxn('${inv.id}','${c.id}')">Del</button>
+          </td>
+        </tr>`;
+      }
+    } else if (inv.type !== 'fd') {
+      for (const t of (inv.transactions || []).slice().sort((a,b) => b.date.localeCompare(a.date))) {
+        html += `<tr class="txn-row" data-parent="${inv.id}">
+          <td colspan="5">${t.date} &mdash; ${parseFloat(t.quantity).toFixed(2)} units @ ${fmtDetailed(t.buy_price)}</td>
+          <td></td>
+          <td>
+            <button class="btn btn-sm" onclick="openEditTxnModal('${inv.id}','${t.id}','market','${t.date}','${t.quantity}','${t.buy_price}','')">Edit</button>
+            <button class="btn btn-sm btn-danger" onclick="deleteTxn('${inv.id}','${t.id}')">Del</button>
+          </td>
+        </tr>`;
+      }
+    }
+  }
+  tbody.innerHTML = html;
+}
+
+function toggleTxns(invId) {
+  document.querySelectorAll(`.txn-row[data-parent="${invId}"]`).forEach(r => r.classList.toggle('show'));
+}
+
+async function loadHistorical() {
+  const loading = document.getElementById('histLoading');
+  loading.style.display = 'flex';
+  const inflation = document.getElementById('inflationToggle').checked;
+  try {
+    const resp = await fetch(`/api/historical?view=${histView}&inflation=${inflation}`);
+    const data = await resp.json();
+    renderLineChart(data);
+  } catch(e) {
+    console.error('Error loading historical:', e);
+  }
+  loading.style.display = 'none';
+}
+
+function renderLineChart(data) {
+  const ctx = document.getElementById('lineChart').getContext('2d');
+  if (lineChart) lineChart.destroy();
+  if (!data.dates || data.dates.length === 0) return;
+
+  const convert = v => currency === 'USD' ? v / usdRate : v;
+
+  if (histView === 'returns') {
+    // Show percentage return over time
+    const returns = data.values.map((v, i) => {
+      const inv = data.invested[i];
+      return inv > 0 ? ((v - inv) / inv) * 100 : 0;
+    });
+    lineChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: data.dates,
+        datasets: [{
+          label: 'Return %',
+          data: returns,
+          borderColor: '#3b82f6',
+          backgroundColor: 'rgba(59,130,246,0.1)',
+          fill: true,
+          tension: 0.3,
+          pointRadius: 0,
+          borderWidth: 2
+        }, {
+          label: '0%',
+          data: returns.map(() => 0),
+          borderColor: '#6b7280',
+          borderDash: [5, 5],
+          borderWidth: 1,
+          pointRadius: 0,
+          fill: false
+        }]
+      },
+      options: {
+        responsive: true,
+        interaction: { intersect: false, mode: 'index' },
+        scales: {
+          x: { ticks: { color: '#9ca3af', maxTicksLimit: 10, font: { size: 10 } }, grid: { color: '#2e3348' } },
+          y: {
+            ticks: { color: '#9ca3af', font: { size: 10 }, callback: v => v.toFixed(1) + '%' },
+            grid: { color: '#2e3348' }
+          }
+        },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: ctx => {
+                if (ctx.datasetIndex === 1) return null;
+                return ctx.parsed.y.toFixed(2) + '%';
+              }
+            }
+          }
+        }
+      }
+    });
+  } else if (histView === 'current') {
+    // Current Holdings: single line showing what current holdings were worth historically
+    const values = data.values.map(convert);
+    lineChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: data.dates,
+        datasets: [{
+          label: 'Current Holdings Value',
+          data: values,
+          borderColor: '#3b82f6',
+          backgroundColor: 'rgba(59,130,246,0.1)',
+          fill: true,
+          tension: 0.3,
+          pointRadius: 0,
+          borderWidth: 2
+        }]
+      },
+      options: {
+        responsive: true,
+        interaction: { intersect: false, mode: 'index' },
+        scales: {
+          x: { ticks: { color: '#9ca3af', maxTicksLimit: 10, font: { size: 10 } }, grid: { color: '#2e3348' } },
+          y: {
+            ticks: {
+              color: '#9ca3af', font: { size: 10 },
+              callback: v => { const sym = currency === 'INR' ? '\u20B9' : '$'; return sym + (v >= 100000 ? (v/100000).toFixed(1)+'L' : v.toLocaleString()); }
+            },
+            grid: { color: '#2e3348' }
+          }
+        },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: ctx => {
+                const sym = currency === 'INR' ? '\u20B9' : '$';
+                return sym + ctx.parsed.y.toLocaleString('en-IN', { maximumFractionDigits: 0 });
+              }
+            }
+          }
+        }
+      }
+    });
+  } else {
+    // Portfolio Value view: two lines
+    const values = data.values.map(convert);
+    const invested = data.invested.map(convert);
+    lineChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: data.dates,
+        datasets: [{
+          label: 'Portfolio Value',
+          data: values,
+          borderColor: '#3b82f6',
+          backgroundColor: 'rgba(59,130,246,0.08)',
+          fill: true,
+          tension: 0.3,
+          pointRadius: 0,
+          borderWidth: 2
+        }, {
+          label: 'Amount Invested',
+          data: invested,
+          borderColor: '#f59e0b',
+          borderDash: [6, 3],
+          backgroundColor: 'transparent',
+          fill: false,
+          tension: 0.3,
+          pointRadius: 0,
+          borderWidth: 2
+        }]
+      },
+      options: {
+        responsive: true,
+        interaction: { intersect: false, mode: 'index' },
+        scales: {
+          x: { ticks: { color: '#9ca3af', maxTicksLimit: 10, font: { size: 10 } }, grid: { color: '#2e3348' } },
+          y: {
+            ticks: {
+              color: '#9ca3af', font: { size: 10 },
+              callback: v => { const sym = currency === 'INR' ? '\u20B9' : '$'; return sym + (v >= 100000 ? (v/100000).toFixed(1)+'L' : v.toLocaleString()); }
+            },
+            grid: { color: '#2e3348' }
+          }
+        },
+        plugins: {
+          legend: { labels: { color: '#d1d5db', usePointStyle: true, pointStyle: 'line', font: { size: 11 } } },
+          tooltip: {
+            callbacks: {
+              label: ctx => {
+                const sym = currency === 'INR' ? '\u20B9' : '$';
+                return ctx.dataset.label + ': ' + sym + ctx.parsed.y.toLocaleString('en-IN', { maximumFractionDigits: 0 });
+              }
+            }
+          }
+        }
+      }
+    });
+  }
+}
+
+function setHistView(view, btn) {
+  histView = view;
+  btn.parentElement.querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  loadHistorical();
+}
+
+async function refreshPrices() {
+  const btn = document.getElementById('refreshBtn');
+  btn.innerHTML = '<span class="spinner"></span> Refreshing...';
+  btn.disabled = true;
+  await fetch('/api/refresh', { method: 'POST' });
+  await loadPortfolio();
+  await loadHistorical();
+  btn.textContent = 'Refresh Prices';
+  btn.disabled = false;
+}
+
+// --- Add Investment Modal ---
+function openAddModal() {
+  document.getElementById('addModal').classList.add('show');
+  onTypeChange();
+}
+function closeModal() {
+  document.getElementById('addModal').classList.remove('show');
+  clearForm();
+}
+
+function onTypeChange() {
+  const t = document.getElementById('invType').value;
+  document.getElementById('marketFields').style.display = ['stock','etf','gold_etf','mutual_fund','crypto'].includes(t) ? 'block' : 'none';
+  document.getElementById('pfFields').style.display = t === 'pf' ? 'block' : 'none';
+  document.getElementById('fdFields').style.display = t === 'fd' ? 'block' : 'none';
+
+  const sl = document.getElementById('searchLabel');
+  if (t === 'mutual_fund') sl.textContent = 'Search Mutual Fund';
+  else if (t === 'crypto') sl.textContent = 'Search Cryptocurrency';
+  else sl.textContent = 'Search Ticker (e.g. RELIANCE, NIFTYBEES)';
+
+  document.getElementById('searchResults').style.display = 'none';
+  document.getElementById('searchInput').value = '';
+  document.getElementById('assetName').value = '';
+  document.getElementById('assetTicker').value = '';
+}
+
+function debounceSearch() {
+  clearTimeout(searchTimeout);
+  searchTimeout = setTimeout(doSearch, 400);
+}
+
+async function doSearch() {
+  const q = document.getElementById('searchInput').value.trim();
+  const t = document.getElementById('invType').value;
+  if (q.length < 2) { document.getElementById('searchResults').style.display = 'none'; return; }
+
+  let url;
+  if (t === 'mutual_fund') url = `/api/search/mf?q=${encodeURIComponent(q)}`;
+  else if (t === 'crypto') url = `/api/search/crypto?q=${encodeURIComponent(q)}`;
+  else url = `/api/search/stock?q=${encodeURIComponent(q)}`;
+
+  try {
+    const resp = await fetch(url);
+    const results = await resp.json();
+    const container = document.getElementById('searchResults');
+
+    if (results.length === 0) {
+      container.innerHTML = '<div style="color:var(--muted)">No results found</div>';
+      container.style.display = 'block';
+      return;
+    }
+
+    let html = '';
+    if (t === 'mutual_fund') {
+      for (const r of results) {
+        html += `<div onclick="selectMF('${r.schemeCode}', '${r.schemeName.replace(/'/g, "\\'")}')">
+          ${r.schemeName} <small>(${r.schemeCode})</small></div>`;
+      }
+    } else if (t === 'crypto') {
+      for (const r of results) {
+        html += `<div onclick="selectCrypto('${r.id}', '${r.name.replace(/'/g, "\\'")}')">
+          ${r.name} <small>(${r.symbol.toUpperCase()})</small></div>`;
+      }
+    } else {
+      for (const r of results) {
+        html += `<div onclick="selectStock('${r.ticker}', '${r.name.replace(/'/g, "\\'")}')">
+          ${r.name} <small>(${r.ticker} - ${r.exchange})</small></div>`;
+      }
+    }
+    container.innerHTML = html;
+    container.style.display = 'block';
+  } catch(e) {
+    console.error(e);
+  }
+}
+
+function selectStock(ticker, name) {
+  document.getElementById('assetTicker').value = ticker;
+  document.getElementById('assetName').value = name;
+  document.getElementById('searchResults').style.display = 'none';
+  document.getElementById('searchInput').value = ticker;
+}
+function selectMF(code, name) {
+  document.getElementById('assetTicker').value = code;
+  document.getElementById('assetName').value = name;
+  document.getElementById('searchResults').style.display = 'none';
+  document.getElementById('searchInput').value = name;
+}
+function selectCrypto(id, name) {
+  document.getElementById('assetTicker').value = id;
+  document.getElementById('assetName').value = name;
+  document.getElementById('searchResults').style.display = 'none';
+  document.getElementById('searchInput').value = name;
+}
+
+async function submitInvestment() {
+  const t = document.getElementById('invType').value;
+  let body = { type: t, category: t };
+
+  if (['stock', 'etf', 'gold_etf'].includes(t)) {
+    body.name = document.getElementById('assetName').value;
+    body.ticker = document.getElementById('assetTicker').value || document.getElementById('searchInput').value.toUpperCase() + '.NS';
+    body.transaction = {
+      date: document.getElementById('txnDate').value,
+      quantity: document.getElementById('txnQty').value,
+      buy_price: document.getElementById('txnPrice').value
+    };
+  } else if (t === 'mutual_fund') {
+    body.name = document.getElementById('assetName').value;
+    body.scheme_code = document.getElementById('assetTicker').value;
+    body.transaction = {
+      date: document.getElementById('txnDate').value,
+      quantity: document.getElementById('txnQty').value,
+      buy_price: document.getElementById('txnPrice').value
+    };
+  } else if (t === 'crypto') {
+    body.name = document.getElementById('assetName').value;
+    body.coin_id = document.getElementById('assetTicker').value;
+    body.transaction = {
+      date: document.getElementById('txnDate').value,
+      quantity: document.getElementById('txnQty').value,
+      buy_price: document.getElementById('txnPrice').value
+    };
+  } else if (t === 'pf') {
+    body.name = document.getElementById('pfName').value;
+    body.interest_rate = parseFloat(document.getElementById('pfRate').value);
+    body.contribution = {
+      date: document.getElementById('pfDate').value,
+      amount: document.getElementById('pfAmount').value
+    };
+  } else if (t === 'fd') {
+    body.name = document.getElementById('fdName').value;
+    body.principal = parseFloat(document.getElementById('fdPrincipal').value);
+    body.interest_rate = parseFloat(document.getElementById('fdRate').value);
+    body.start_date = document.getElementById('fdStart').value;
+    body.maturity_date = document.getElementById('fdMaturity').value;
+    body.compounding = document.getElementById('fdCompounding').value;
+  }
+
+  await fetch('/api/investment', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  closeModal();
+  await fetch('/api/refresh', { method: 'POST' });
+  await loadPortfolio();
+  loadHistorical();
+}
+
+// --- Transaction Modal ---
+function openTxnModal(invId, invType, name) {
+  document.getElementById('txnModal').classList.add('show');
+  document.getElementById('txnInvId').value = invId;
+  document.getElementById('txnInvType').value = invType;
+  document.getElementById('txnModalTitle').textContent = 'Add to ' + name;
+  document.getElementById('txnMarketFields').style.display = invType === 'pf' ? 'none' : 'block';
+  document.getElementById('txnPfFields').style.display = invType === 'pf' ? 'block' : 'none';
+}
+function closeTxnModal() {
+  document.getElementById('txnModal').classList.remove('show');
+}
+
+async function submitTransaction() {
+  const invId = document.getElementById('txnInvId').value;
+  const invType = document.getElementById('txnInvType').value;
+  let body;
+  if (invType === 'pf') {
+    body = { date: document.getElementById('txnPfDate').value, amount: document.getElementById('txnPfAmount').value };
+  } else {
+    body = {
+      date: document.getElementById('txnAddDate').value,
+      quantity: document.getElementById('txnAddQty').value,
+      buy_price: document.getElementById('txnAddPrice').value
+    };
+  }
+  await fetch(`/api/investment/${invId}/transaction`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  closeTxnModal();
+  await fetch('/api/refresh', { method: 'POST' });
+  await loadPortfolio();
+  loadHistorical();
+}
+
+async function deleteInvestment(id) {
+  if (!confirm('Delete this investment?')) return;
+  await fetch(`/api/investment/${id}`, { method: 'DELETE' });
+  await loadPortfolio();
+  loadHistorical();
+}
+
+async function deleteTxn(invId, txnId) {
+  if (!confirm('Delete this transaction?')) return;
+  await fetch(`/api/investment/${invId}/transaction/${txnId}`, { method: 'DELETE' });
+  await loadPortfolio();
+  loadHistorical();
+}
+
+// --- Edit Transaction Modal ---
+function openEditTxnModal(invId, txnId, txnType, date, qty, price, amount) {
+  document.getElementById('editTxnModal').classList.add('show');
+  document.getElementById('editTxnInvId').value = invId;
+  document.getElementById('editTxnId').value = txnId;
+  document.getElementById('editTxnType').value = txnType;
+
+  if (txnType === 'pf') {
+    document.getElementById('editMarketFields').style.display = 'none';
+    document.getElementById('editPfFields').style.display = 'block';
+    document.getElementById('editPfAmount').value = amount;
+    const fp = document.getElementById('editPfDate')._flatpickr;
+    if (fp) fp.setDate(date, true);
+  } else {
+    document.getElementById('editMarketFields').style.display = 'block';
+    document.getElementById('editPfFields').style.display = 'none';
+    document.getElementById('editQty').value = qty;
+    document.getElementById('editPrice').value = price;
+    const fp = document.getElementById('editDate')._flatpickr;
+    if (fp) fp.setDate(date, true);
+  }
+}
+
+function closeEditTxnModal() {
+  document.getElementById('editTxnModal').classList.remove('show');
+}
+
+async function submitEditTransaction() {
+  const invId = document.getElementById('editTxnInvId').value;
+  const txnId = document.getElementById('editTxnId').value;
+  const txnType = document.getElementById('editTxnType').value;
+  let body;
+  if (txnType === 'pf') {
+    body = { date: document.getElementById('editPfDate').value, amount: document.getElementById('editPfAmount').value };
+  } else {
+    body = {
+      date: document.getElementById('editDate').value,
+      quantity: document.getElementById('editQty').value,
+      buy_price: document.getElementById('editPrice').value
+    };
+  }
+  await fetch('/api/investment/' + invId + '/transaction/' + txnId, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+  });
+  closeEditTxnModal();
+  await fetch('/api/refresh', { method: 'POST' });
+  await loadPortfolio();
+  loadHistorical();
+}
+
+// --- Edit Investment Modal ---
+function openEditInvModal(invId) {
+  var inv = portfolioData.investments.find(function(i) { return i.id === invId; });
+  if (!inv) return;
+
+  document.getElementById('editInvModal').classList.add('show');
+  document.getElementById('editInvId').value = invId;
+  document.getElementById('editInvType').value = inv.type;
+  document.getElementById('editInvName').value = inv.name;
+
+  // Populate type-specific fields
+  document.getElementById('editInvTicker').value = inv.ticker || '';
+  document.getElementById('editInvSchemeCode').value = inv.scheme_code || '';
+  document.getElementById('editInvCoinId').value = inv.coin_id || '';
+  document.getElementById('editInvPfRate').value = inv.interest_rate || '';
+  document.getElementById('editInvFdPrincipal').value = inv.principal || '';
+  document.getElementById('editInvFdRate').value = inv.interest_rate || '';
+  document.getElementById('editInvFdCompounding').value = inv.compounding || 'quarterly';
+  var fpStart = document.getElementById('editInvFdStart')._flatpickr;
+  var fpMat = document.getElementById('editInvFdMaturity')._flatpickr;
+  if (fpStart) fpStart.setDate(inv.start_date || '', true);
+  if (fpMat) fpMat.setDate(inv.maturity_date || '', true);
+
+  onEditInvTypeChange();
+}
+
+function onEditInvTypeChange() {
+  var t = document.getElementById('editInvType').value;
+  ['editInvStockFields','editInvMfFields','editInvCryptoFields','editInvPfFields','editInvFdFields'].forEach(function(id) {
+    document.getElementById(id).style.display = 'none';
+  });
+  if (['stock','etf','gold_etf'].includes(t)) {
+    document.getElementById('editInvStockFields').style.display = 'block';
+  } else if (t === 'mutual_fund') {
+    document.getElementById('editInvMfFields').style.display = 'block';
+  } else if (t === 'crypto') {
+    document.getElementById('editInvCryptoFields').style.display = 'block';
+  } else if (t === 'pf') {
+    document.getElementById('editInvPfFields').style.display = 'block';
+  } else if (t === 'fd') {
+    document.getElementById('editInvFdFields').style.display = 'block';
+  }
+}
+
+function closeEditInvModal() {
+  document.getElementById('editInvModal').classList.remove('show');
+}
+
+async function submitEditInvestment() {
+  var invId = document.getElementById('editInvId').value;
+  var invType = document.getElementById('editInvType').value;
+  var body = { name: document.getElementById('editInvName').value, type: invType, category: invType };
+
+  if (['stock','etf','gold_etf'].includes(invType)) {
+    body.ticker = document.getElementById('editInvTicker').value;
+  } else if (invType === 'mutual_fund') {
+    body.scheme_code = document.getElementById('editInvSchemeCode').value;
+  } else if (invType === 'crypto') {
+    body.coin_id = document.getElementById('editInvCoinId').value;
+  } else if (invType === 'pf') {
+    body.interest_rate = parseFloat(document.getElementById('editInvPfRate').value);
+  } else if (invType === 'fd') {
+    body.principal = parseFloat(document.getElementById('editInvFdPrincipal').value);
+    body.interest_rate = parseFloat(document.getElementById('editInvFdRate').value);
+    body.start_date = document.getElementById('editInvFdStart').value;
+    body.maturity_date = document.getElementById('editInvFdMaturity').value;
+    body.compounding = document.getElementById('editInvFdCompounding').value;
+  }
+
+  await fetch('/api/investment/' + invId, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+  });
+  closeEditInvModal();
+  await fetch('/api/refresh', { method: 'POST' });
+  await loadPortfolio();
+  loadHistorical();
+}
+
+// --- Import CSV Modal ---
+function openImportModal() {
+  document.getElementById('importModal').classList.add('show');
+  document.getElementById('importFiles').value = '';
+  document.getElementById('importStatus').style.display = 'none';
+}
+
+function closeImportModal() {
+  document.getElementById('importModal').classList.remove('show');
+}
+
+async function submitImport() {
+  var files = document.getElementById('importFiles').files;
+  if (files.length === 0) return;
+
+  var btn = document.getElementById('importBtn');
+  var status = document.getElementById('importStatus');
+  btn.innerHTML = '<span class="spinner"></span> Importing...';
+  btn.disabled = true;
+  status.style.display = 'block';
+  status.style.color = 'var(--muted)';
+  status.textContent = 'Processing files...';
+
+  var totalImported = 0;
+  var errors = [];
+
+  for (var i = 0; i < files.length; i++) {
+    var formData = new FormData();
+    formData.append('file', files[i]);
+    try {
+      var resp = await fetch('/api/import', { method: 'POST', body: formData });
+      var data = await resp.json();
+      if (data.status === 'ok') {
+        totalImported += data.imported;
+      } else {
+        errors.push(files[i].name + ': ' + (data.message || 'Unknown error'));
+      }
+    } catch(e) {
+      errors.push(files[i].name + ': ' + e.message);
+    }
+  }
+
+  btn.textContent = 'Import';
+  btn.disabled = false;
+
+  if (errors.length > 0) {
+    status.style.color = 'var(--red)';
+    status.textContent = 'Errors: ' + errors.join('; ');
+  } else {
+    status.style.color = 'var(--green)';
+    status.textContent = 'Imported ' + totalImported + ' trades successfully.';
+    setTimeout(function() { closeImportModal(); }, 1500);
+  }
+
+  await loadPortfolio();
+  loadHistorical();
+}
+
+function clearForm() {
+  document.querySelectorAll('.modal input[type="text"], .modal input[type="number"]').forEach(i => i.value = '');
+  document.querySelectorAll('.modal .datepicker').forEach(el => {
+    if (el._flatpickr) el._flatpickr.clear();
+  });
+  document.getElementById('searchResults').style.display = 'none';
+}
+
+// Init Flatpickr on all date inputs
+var fpConfig = {
+  dateFormat: 'Y-m-d',
+  altInput: true,
+  altFormat: 'j M Y',
+  maxDate: 'today',
+  allowInput: true,
+  disableMobile: true,
+  monthSelectorType: 'dropdown',
+  parseDate: function(dateStr, format) {
+    var d = flatpickr.parseDate(dateStr, format);
+    if (d) return d;
+    d = flatpickr.parseDate(dateStr, 'j M Y');
+    if (d) return d;
+    d = flatpickr.parseDate(dateStr, 'd-m-Y');
+    if (d) return d;
+    d = flatpickr.parseDate(dateStr, 'd/m/Y');
+    if (d) return d;
+    return new Date(dateStr);
+  }
+};
+var fpFutureConfig = Object.assign({}, fpConfig, { maxDate: null });
+document.querySelectorAll('.datepicker').forEach(function(el) {
+  flatpickr(el, (el.id === 'fdMaturity' || el.id === 'editInvFdMaturity') ? fpFutureConfig : fpConfig);
+});
+
+// Init
+loadPortfolio();
+loadHistorical();
+</script>
+</body>
+</html>
