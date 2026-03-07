@@ -1,6 +1,8 @@
 # Local Portfolio Tracker
 
-A local, self-hosted portfolio tracker for investors that don't want online portfolio trackers to sell their financial data. Track stocks, ETFs, gold ETFs, mutual funds, crypto, Provident Fund contributions, and Fixed Deposits — all in one place with live prices and historical charts.
+A local, self-hosted portfolio tracker for investors that don't want online portfolio trackers to sell their financial data.
+
+Track stocks, ETFs, gold ETFs, mutual funds, crypto, Provident Fund contributions, and Fixed Deposits — all in one place with live prices and historical charts.
 
 ![Python](https://img.shields.io/badge/Python-3.8+-blue) ![Flask](https://img.shields.io/badge/Flask-Backend-green)
 
@@ -16,7 +18,7 @@ A local, self-hosted portfolio tracker for investors that don't want online port
 
 ### Portfolio Dashboard
 - Total portfolio value, total invested, and gain/loss summary
-- Pie chart breakdown by asset category
+- Pie chart breakdown by asset category and within asset category
 - Filter investments by **Current / Past / All**
 - Manual price refresh
 - INR default with USD conversion toggle
