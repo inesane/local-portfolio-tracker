@@ -19,6 +19,8 @@ _usd_inr_rate = None
 
 
 def load_portfolio():
+    if not os.path.exists(PORTFOLIO_FILE):
+        return {"investments": []}
     with open(PORTFOLIO_FILE, "r") as f:
         return json.load(f)
 
