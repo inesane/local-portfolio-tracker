@@ -79,8 +79,8 @@ Track stocks, ETFs, gold ETFs, mutual funds, crypto, Provident Fund contribution
 
 ```bash
 # Clone the repository
-git clone https://github.com/inesane/investment-portfolio-tracker.git
-cd investment-portfolio-tracker
+git clone https://github.com/inesane/local-portfolio-tracker.git
+cd local-portfolio-tracker
 
 # Install dependencies
 pip install -r requirements.txt

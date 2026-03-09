@@ -3,3 +3,5 @@ __pycache__/
 .claude/
 import/
 portfolio.json
+build/
+dist/
