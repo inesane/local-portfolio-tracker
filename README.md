@@ -2,7 +2,7 @@
 
 A local, self-hosted portfolio tracker for Indian investors that don't want online portfolio trackers to sell their financial data.
 
-Track stocks, ETFs, gold ETFs, mutual funds, crypto, Provident Fund contributions, and Fixed Deposits — all in one place with live prices and historical charts.
+Track stocks, mutual funds, commodities, crypto, Provident Fund contributions, and Fixed Deposits — all in one place with live prices and historical charts.
 
 ![Python](https://img.shields.io/badge/Python-3.8+-blue) ![Flask](https://img.shields.io/badge/Flask-Backend-green)
 
