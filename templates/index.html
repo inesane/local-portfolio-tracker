@@ -172,9 +172,17 @@
           <button class="toggle-btn" onclick="setHistView('returns', this)">Returns %</button>
           <button class="toggle-btn" onclick="setHistView('current', this)">Current Holdings</button>
         </div>
-        <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;color:var(--muted);">
-          <input type="checkbox" id="inflationToggle" onchange="loadHistorical()"> Inflation Adjusted
-        </label>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;">
+          <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;color:var(--muted);">
+            <input type="checkbox" id="investedToggle" onchange="loadHistorical()"> Amount Invested
+          </label>
+          <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;color:var(--muted);">
+            <input type="checkbox" id="benchmarkToggle" onchange="loadHistorical()"> Nifty 50
+          </label>
+          <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;color:var(--muted);">
+            <input type="checkbox" id="inflationToggle" onchange="loadHistorical()"> Inflation Adjusted
+          </label>
+        </div>
       </div>
       <canvas id="lineChart"></canvas>
       <div class="loading-overlay" id="histLoading" style="display:none;"><div class="spinner"></div></div>
@@ -824,8 +832,9 @@ async function loadHistorical() {
   const loading = document.getElementById('histLoading');
   loading.style.display = 'flex';
   const inflation = document.getElementById('inflationToggle').checked;
+  const benchmark = document.getElementById('benchmarkToggle').checked;
   try {
-    const resp = await fetch(`/api/historical?view=${histView}&inflation=${inflation}`);
+    const resp = await fetch(`/api/historical?view=${histView}&inflation=${inflation}&benchmark=${benchmark}`);
     const data = await resp.json();
     renderLineChart(data);
   } catch(e) {
@@ -840,36 +849,78 @@ function renderLineChart(data) {
   if (!data.dates || data.dates.length === 0) return;
 
   const convert = v => currency === 'USD' ? v / usdRate : v;
+  const showInvested = document.getElementById('investedToggle').checked;
+  const hasBenchmark = data.benchmark && data.benchmark.some(v => v !== null);
+
+  // Benchmark = "what if all invested money went into Nifty 50 instead"
+  // Backend returns simulated portfolio value, so we can use it directly or derive returns
+  function benchmarkReturnDataset() {
+    if (!hasBenchmark) return null;
+    const returns = data.benchmark.map((v, i) => {
+      const inv = data.invested[i];
+      if (v === null || !inv || inv <= 0) return null;
+      return ((v - inv) / inv) * 100;
+    });
+    return {
+      label: 'Nifty 50',
+      data: returns,
+      borderColor: '#ef4444',
+      backgroundColor: 'transparent',
+      borderDash: [4, 4],
+      fill: false,
+      tension: 0.3,
+      pointRadius: 0,
+      borderWidth: 2,
+      spanGaps: true
+    };
+  }
+
+  function benchmarkValueDataset() {
+    if (!hasBenchmark) return null;
+    const values = data.benchmark.map(v => v !== null ? convert(v) : null);
+    return {
+      label: 'Nifty 50',
+      data: values,
+      borderColor: '#ef4444',
+      backgroundColor: 'transparent',
+      borderDash: [4, 4],
+      fill: false,
+      tension: 0.3,
+      pointRadius: 0,
+      borderWidth: 2,
+      spanGaps: true
+    };
+  }
 
   if (histView === 'returns') {
-    // Show percentage return over time
     const returns = data.values.map((v, i) => {
       const inv = data.invested[i];
       return inv > 0 ? ((v - inv) / inv) * 100 : 0;
     });
+    const datasets = [{
+      label: 'Return %',
+      data: returns,
+      borderColor: '#3b82f6',
+      backgroundColor: 'rgba(59,130,246,0.1)',
+      fill: true,
+      tension: 0.3,
+      pointRadius: 0,
+      borderWidth: 2
+    }, {
+      label: '0%',
+      data: returns.map(() => 0),
+      borderColor: '#6b7280',
+      borderDash: [5, 5],
+      borderWidth: 1,
+      pointRadius: 0,
+      fill: false
+    }];
+    const bmDs = benchmarkReturnDataset();
+    if (bmDs) datasets.push(bmDs);
+
     lineChart = new Chart(ctx, {
       type: 'line',
-      data: {
-        labels: data.dates,
-        datasets: [{
-          label: 'Return %',
-          data: returns,
-          borderColor: '#3b82f6',
-          backgroundColor: 'rgba(59,130,246,0.1)',
-          fill: true,
-          tension: 0.3,
-          pointRadius: 0,
-          borderWidth: 2
-        }, {
-          label: '0%',
-          data: returns.map(() => 0),
-          borderColor: '#6b7280',
-          borderDash: [5, 5],
-          borderWidth: 1,
-          pointRadius: 0,
-          fill: false
-        }]
-      },
+      data: { labels: data.dates, datasets },
       options: {
         responsive: true,
         interaction: { intersect: false, mode: 'index' },
@@ -881,12 +932,12 @@ function renderLineChart(data) {
           }
         },
         plugins: {
-          legend: { display: false },
+          legend: { display: bmDs ? true : false, labels: { color: '#d1d5db', usePointStyle: true, pointStyle: 'line', font: { size: 11 } } },
           tooltip: {
             callbacks: {
               label: ctx => {
-                if (ctx.datasetIndex === 1) return null;
-                return ctx.parsed.y.toFixed(2) + '%';
+                if (ctx.dataset.label === '0%') return null;
+                return ctx.dataset.label + ': ' + ctx.parsed.y.toFixed(2) + '%';
               }
             }
           }
@@ -894,23 +945,24 @@ function renderLineChart(data) {
       }
     });
   } else if (histView === 'current') {
-    // Current Holdings: single line showing what current holdings were worth historically
     const values = data.values.map(convert);
+    const datasets = [{
+      label: 'Current Holdings Value',
+      data: values,
+      borderColor: '#3b82f6',
+      backgroundColor: 'rgba(59,130,246,0.1)',
+      fill: true,
+      tension: 0.3,
+      pointRadius: 0,
+      borderWidth: 2
+    }];
+    const bmDs = benchmarkValueDataset();
+    if (bmDs) datasets.push(bmDs);
+
+    const hasMultiple = datasets.length > 1;
     lineChart = new Chart(ctx, {
       type: 'line',
-      data: {
-        labels: data.dates,
-        datasets: [{
-          label: 'Current Holdings Value',
-          data: values,
-          borderColor: '#3b82f6',
-          backgroundColor: 'rgba(59,130,246,0.1)',
-          fill: true,
-          tension: 0.3,
-          pointRadius: 0,
-          borderWidth: 2
-        }]
-      },
+      data: { labels: data.dates, datasets },
       options: {
         responsive: true,
         interaction: { intersect: false, mode: 'index' },
@@ -925,12 +977,12 @@ function renderLineChart(data) {
           }
         },
         plugins: {
-          legend: { display: false },
+          legend: { display: hasMultiple, labels: { color: '#d1d5db', usePointStyle: true, pointStyle: 'line', font: { size: 11 } } },
           tooltip: {
             callbacks: {
               label: ctx => {
                 const sym = currency === 'INR' ? '\u20B9' : '$';
-                return sym + ctx.parsed.y.toLocaleString('en-IN', { maximumFractionDigits: 0 });
+                return ctx.dataset.label + ': ' + sym + ctx.parsed.y.toLocaleString('en-IN', { maximumFractionDigits: 0 });
               }
             }
           }
@@ -938,34 +990,39 @@ function renderLineChart(data) {
       }
     });
   } else {
-    // Portfolio Value view: two lines
+    // Portfolio Value view
     const values = data.values.map(convert);
     const invested = data.invested.map(convert);
+    const datasets = [{
+      label: 'Portfolio Value',
+      data: values,
+      borderColor: '#3b82f6',
+      backgroundColor: 'rgba(59,130,246,0.08)',
+      fill: true,
+      tension: 0.3,
+      pointRadius: 0,
+      borderWidth: 2
+    }];
+    if (showInvested) {
+      datasets.push({
+        label: 'Amount Invested',
+        data: invested,
+        borderColor: '#f59e0b',
+        borderDash: [6, 3],
+        backgroundColor: 'transparent',
+        fill: false,
+        tension: 0.3,
+        pointRadius: 0,
+        borderWidth: 2
+      });
+    }
+    const bmDs = benchmarkValueDataset();
+    if (bmDs) datasets.push(bmDs);
+
+    const hasMultiple = datasets.length > 1;
     lineChart = new Chart(ctx, {
       type: 'line',
-      data: {
-        labels: data.dates,
-        datasets: [{
-          label: 'Portfolio Value',
-          data: values,
-          borderColor: '#3b82f6',
-          backgroundColor: 'rgba(59,130,246,0.08)',
-          fill: true,
-          tension: 0.3,
-          pointRadius: 0,
-          borderWidth: 2
-        }, {
-          label: 'Amount Invested',
-          data: invested,
-          borderColor: '#f59e0b',
-          borderDash: [6, 3],
-          backgroundColor: 'transparent',
-          fill: false,
-          tension: 0.3,
-          pointRadius: 0,
-          borderWidth: 2
-        }]
-      },
+      data: { labels: data.dates, datasets },
       options: {
         responsive: true,
         interaction: { intersect: false, mode: 'index' },
@@ -980,7 +1037,7 @@ function renderLineChart(data) {
           }
         },
         plugins: {
-          legend: { labels: { color: '#d1d5db', usePointStyle: true, pointStyle: 'line', font: { size: 11 } } },
+          legend: { display: hasMultiple, labels: { color: '#d1d5db', usePointStyle: true, pointStyle: 'line', font: { size: 11 } } },
           tooltip: {
             callbacks: {
               label: ctx => {

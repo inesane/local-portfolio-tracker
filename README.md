@@ -30,6 +30,8 @@ Track stocks, mutual funds, commodities, crypto, Provident Fund contributions, a
 - **Portfolio Value** — Two-line chart showing portfolio value vs amount invested over time, making profit/loss visible at a glance
 - **Returns %** — Percentage return over time with a 0% baseline
 - **Current Holdings** — What your current holdings would have been worth historically (backwards projection)
+- **Nifty 50 benchmark** toggle — overlay Nifty 50 performance on any chart view to compare against the index
+- **Amount Invested** toggle — optionally show/hide the invested amount line
 - **Inflation adjustment** toggle using World Bank India CPI data (with monthly interpolation and extrapolation for recent years)
 
 ### Import
@@ -119,7 +121,6 @@ All portfolio data is stored locally in `portfolio.json`. No data is sent to any
 
 ## Future Plans
 
-- **Benchmarking** — Compare portfolio returns against Nifty 50, Sensex, or other indices
 - **XIRR calculation** — Annualized returns accounting for irregular cash flows
 - **Asset rebalancing suggestions** — Target allocation vs actual allocation with rebalance recommendations
 - **Export** — Download portfolio data as CSV/Excel

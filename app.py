@@ -606,6 +606,7 @@ def exchange_rate():
 def historical():
     view = request.args.get("view", "value")  # "value", "returns", or "current"
     use_inflation = request.args.get("inflation", "false") == "true"
+    use_benchmark = request.args.get("benchmark", "false") == "true"
 
     portfolio = load_portfolio()
     investments = portfolio.get("investments", [])
@@ -740,7 +741,63 @@ def historical():
         values.append(round(total, 2))
         invested_values.append(round(total_invested, 2))
 
-    return jsonify({"dates": date_points, "values": values, "invested": invested_values})
+    result = {"dates": date_points, "values": values, "invested": invested_values}
+
+    # Add Nifty 50 benchmark data if requested
+    # Simulates: "what if every rupee invested went into Nifty 50 instead?"
+    if use_benchmark and date_points:
+        nifty_inv = {"id": "_nifty50", "type": "stock", "ticker": "^NSEI"}
+        nifty_prices = get_historical_prices(nifty_inv, date_points[0], date_points[-1])
+
+        def get_nifty_price(date_str):
+            dt = datetime.strptime(date_str, "%Y-%m-%d")
+            for offset in range(7):
+                check = (dt - timedelta(days=offset)).strftime("%Y-%m-%d")
+                if check in nifty_prices:
+                    return nifty_prices[check]
+            return None
+
+        # Collect all cash flows: (date, amount) for each investment
+        cash_flows = []
+        for inv in investments:
+            inv_type = inv["type"]
+            if inv_type == "fd":
+                cash_flows.append((inv["start_date"], float(inv["principal"])))
+            elif inv_type == "pf":
+                for c in inv.get("contributions", []):
+                    cash_flows.append((c["date"], float(c["amount"])))
+            else:
+                for t in inv.get("transactions", []):
+                    amt = float(t["quantity"]) * float(t["buy_price"])
+                    cash_flows.append((t["date"], amt))
+
+        # Sort cash flows by date
+        cash_flows.sort(key=lambda x: x[0])
+
+        # For each cash flow, compute Nifty units bought
+        nifty_units = []  # list of (date, units)
+        for cf_date, cf_amount in cash_flows:
+            price = get_nifty_price(cf_date)
+            if price and price > 0 and cf_amount > 0:
+                nifty_units.append((cf_date, cf_amount / price))
+
+        # For each date point, sum units accumulated so far × current Nifty price
+        benchmark_values = []
+        cf_idx = 0
+        cumulative_units = 0.0
+        for dp in date_points:
+            # Accumulate units from cash flows up to this date
+            while cf_idx < len(nifty_units) and nifty_units[cf_idx][0] <= dp:
+                cumulative_units += nifty_units[cf_idx][1]
+                cf_idx += 1
+            nifty_price = get_nifty_price(dp)
+            if nifty_price is not None and cumulative_units > 0:
+                benchmark_values.append(round(cumulative_units * nifty_price, 2))
+            else:
+                benchmark_values.append(None)
+        result["benchmark"] = benchmark_values
+
+    return jsonify(result)
 
 
 @app.route("/api/historical-allocation")
