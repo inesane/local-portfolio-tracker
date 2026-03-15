@@ -409,6 +409,27 @@ def get_portfolio():
             item["gain_loss"] = 0
             item["gain_loss_pct"] = 0
 
+        # Per-investment XIRR
+        today = datetime.now().strftime("%Y-%m-%d")
+        inv_flows = []
+        if inv_type == "fd":
+            if item["current_value"] > 0:
+                inv_flows.append((inv["start_date"], -float(inv["principal"])))
+                inv_flows.append((today, item["current_value"]))
+        elif inv_type == "pf":
+            for c in inv.get("contributions", []):
+                inv_flows.append((c["date"], -float(c["amount"])))
+            if item["current_value"] > 0:
+                inv_flows.append((today, item["current_value"]))
+        else:
+            for t in inv.get("transactions", []):
+                amt = float(t["quantity"]) * float(t["buy_price"])
+                if amt > 0:
+                    inv_flows.append((t["date"], -amt))
+            if item["current_value"] > 0:
+                inv_flows.append((today, item["current_value"]))
+        item["xirr"] = calculate_xirr(inv_flows) if len(inv_flows) >= 2 else None
+
         total_value += item["current_value"]
         total_invested += item["invested"]
         results.append(item)

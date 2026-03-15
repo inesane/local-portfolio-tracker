@@ -193,18 +193,27 @@
   <div class="investments-section">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
       <h2>Investments</h2>
-      <div class="toggle-group">
-        <button class="toggle-btn active" id="btnCurrent" onclick="setInvFilter('current', this)">Current</button>
-        <button class="toggle-btn" id="btnPast" onclick="setInvFilter('past', this)">Past</button>
-        <button class="toggle-btn" id="btnAll" onclick="setInvFilter('all', this)">All</button>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;">
+        <div class="toggle-group">
+          <button class="toggle-btn active" id="btnCurrent" onclick="setInvFilter('current', this)">Current</button>
+          <button class="toggle-btn" id="btnPast" onclick="setInvFilter('past', this)">Past</button>
+          <button class="toggle-btn" id="btnAll" onclick="setInvFilter('all', this)">All</button>
+        </div>
+        <div class="toggle-group">
+          <button class="toggle-btn active" onclick="setClassFilter('all', this)">All Classes</button>
+          <button class="toggle-btn" onclick="setClassFilter('equity', this)">Equity</button>
+          <button class="toggle-btn" onclick="setClassFilter('debt', this)">Debt</button>
+          <button class="toggle-btn" onclick="setClassFilter('commodities', this)">Commodities</button>
+          <button class="toggle-btn" onclick="setClassFilter('crypto', this)">Crypto</button>
+        </div>
       </div>
     </div>
     <div class="card" style="overflow-x:auto;">
       <table class="inv-table" id="invTable">
         <thead>
           <tr>
-            <th>Name</th><th>Type</th><th>Qty / Principal</th><th>Invested</th>
-            <th>Current Value</th><th>Gain/Loss</th><th style="text-align:right;">Actions</th>
+            <th>Name</th><th>Type</th><th>Quantity</th><th>Invested</th>
+            <th>Current Value</th><th>Gain/Loss</th><th>XIRR</th><th style="text-align:right;">Actions</th>
           </tr>
         </thead>
         <tbody id="invBody"></tbody>
@@ -508,6 +517,7 @@ let pieChart = null;
 let lineChart = null;
 let histView = 'value';
 let invFilter = 'current';
+let classFilter = 'all';
 let searchTimeout = null;
 
 const CATEGORY_COLORS = {
@@ -533,6 +543,38 @@ let _lastPieInvestments = [];
 let pieDrillCategory = null;
 let _histAllocData = null;
 let _histAllocLoading = false;
+
+function computeXirrJS(flows) {
+  // flows: [[date_str, amount], ...] where negative = outflow
+  if (!flows || flows.length < 2) return null;
+  const parsed = flows.map(([d, a]) => [new Date(d + 'T00:00:00'), a]).sort((a, b) => a[0] - b[0]);
+  const d0 = parsed[0][0];
+  const dayMs = 86400000;
+  function npv(rate) {
+    let s = 0;
+    for (const [dt, amt] of parsed) s += amt / Math.pow(1 + rate, (dt - d0) / dayMs / 365.25);
+    return s;
+  }
+  function dnpv(rate) {
+    let s = 0;
+    for (const [dt, amt] of parsed) {
+      const y = (dt - d0) / dayMs / 365.25;
+      s += -y * amt / Math.pow(1 + rate, y + 1);
+    }
+    return s;
+  }
+  let rate = 0.1;
+  for (let i = 0; i < 200; i++) {
+    const n = npv(rate), d = dnpv(rate);
+    if (Math.abs(d) < 1e-12) break;
+    let nr = rate - n / d;
+    nr = Math.max(nr, -0.99);
+    if (Math.abs(nr - rate) < 1e-9) return parseFloat((nr * 100).toFixed(2));
+    rate = nr;
+  }
+  if (Math.abs(npv(rate)) < 1.0) return parseFloat((rate * 100).toFixed(2));
+  return null;
+}
 
 function fmt(val) {
   if (currency === 'USD') val = val / usdRate;
@@ -755,7 +797,14 @@ function isCurrentInvestment(inv) {
 
 function setInvFilter(filter, btn) {
   invFilter = filter;
-  document.querySelectorAll('.investments-section .toggle-btn').forEach(function(b) { b.classList.remove('active'); });
+  btn.parentElement.querySelectorAll('.toggle-btn').forEach(function(b) { b.classList.remove('active'); });
+  btn.classList.add('active');
+  renderPortfolio();
+}
+
+function setClassFilter(filter, btn) {
+  classFilter = filter;
+  btn.parentElement.querySelectorAll('.toggle-btn').forEach(function(b) { b.classList.remove('active'); });
   btn.classList.add('active');
   renderPortfolio();
 }
@@ -764,11 +813,17 @@ function renderTable(investments) {
   const tbody = document.getElementById('invBody');
   const empty = document.getElementById('emptyState');
 
-  // Filter investments based on selected view
+  // Filter investments based on selected view and asset class
   const filtered = investments.filter(function(inv) {
-    if (invFilter === 'all') return true;
-    var isCurrent = isCurrentInvestment(inv);
-    return invFilter === 'current' ? isCurrent : !isCurrent;
+    if (invFilter !== 'all') {
+      var isCurrent = isCurrentInvestment(inv);
+      if (invFilter === 'current' ? !isCurrent : isCurrent) return false;
+    }
+    if (classFilter !== 'all') {
+      const broad = BROAD_CATEGORY_MAP[inv.category || inv.type];
+      if (broad !== classFilter) return false;
+    }
+    return true;
   });
 
   if (filtered.length === 0) {
@@ -782,14 +837,41 @@ function renderTable(investments) {
   empty.style.display = 'none';
 
   let html = '';
+  let totInvested = 0, totValue = 0, totGL = 0;
+  // Collect XIRR cash flows for filtered total
+  const totalXirrFlows = [];
+  const today = new Date().toISOString().slice(0, 10);
+
   for (const inv of filtered) {
-    const isMarket = !['pf', 'fd'].includes(inv.type);
     const gl = inv.gain_loss || 0;
     const glClass = gl >= 0 ? 'positive' : 'negative';
     const glPct = inv.gain_loss_pct || 0;
     const qtyLabel = inv.type === 'fd' ? fmtDetailed(inv.principal) :
                      inv.type === 'pf' ? (inv.contributions||[]).length + ' contributions' :
                      parseFloat(inv.total_quantity || 0).toFixed(2);
+    const xirrStr = inv.xirr !== null && inv.xirr !== undefined ? (inv.xirr >= 0 ? '+' : '') + inv.xirr + '%' : '--';
+    const xirrClass = inv.xirr !== null && inv.xirr !== undefined ? (inv.xirr >= 0 ? 'positive' : 'negative') : '';
+
+    totInvested += inv.invested || 0;
+    totValue += inv.current_value || 0;
+    totGL += gl;
+
+    // Collect cash flows for filtered XIRR
+    if (inv.type === 'fd') {
+      if (inv.current_value > 0) {
+        totalXirrFlows.push([inv.start_date, -parseFloat(inv.principal)]);
+        totalXirrFlows.push([today, inv.current_value]);
+      }
+    } else if (inv.type === 'pf') {
+      for (const c of (inv.contributions || [])) totalXirrFlows.push([c.date, -parseFloat(c.amount)]);
+      if (inv.current_value > 0) totalXirrFlows.push([today, inv.current_value]);
+    } else {
+      for (const t of (inv.transactions || [])) {
+        const amt = parseFloat(t.quantity) * parseFloat(t.buy_price);
+        if (amt > 0) totalXirrFlows.push([t.date, -amt]);
+      }
+      if (inv.current_value > 0) totalXirrFlows.push([today, inv.current_value]);
+    }
 
     const schedBadge = inv.schedule ? ' <span style="font-size:0.65rem;background:#22c55e;color:#000;padding:1px 5px;border-radius:3px;vertical-align:middle;">recurring</span>' : '';
     html += `<tr class="expandable" onclick="toggleTxns('${inv.id}')">
@@ -799,6 +881,7 @@ function renderTable(investments) {
       <td>${fmtDetailed(inv.invested)}</td>
       <td>${fmtDetailed(inv.current_value)}</td>
       <td class="${glClass}">${fmtDetailed(gl)} (${glPct >= 0 ? '+' : ''}${glPct}%)</td>
+      <td class="${xirrClass}">${xirrStr}</td>
       <td style="white-space:nowrap;text-align:right;">
         ${inv.type !== 'fd' ? `<button class="btn btn-sm" onclick="event.stopPropagation();openTxnModal('${inv.id}','${inv.type}','${inv.name}')">+ Add</button>` : ''}
         <button class="btn btn-sm" onclick="event.stopPropagation();openEditInvModal('${inv.id}')">Edit</button>
@@ -810,7 +893,7 @@ function renderTable(investments) {
     if (inv.type === 'pf') {
       for (const c of (inv.contributions || []).slice().sort((a,b) => b.date.localeCompare(a.date))) {
         html += `<tr class="txn-row" data-parent="${inv.id}">
-          <td colspan="5">${c.date} &mdash; ${fmtDetailed(parseFloat(c.amount).toFixed(2))}</td>
+          <td colspan="6">${c.date} &mdash; ${fmtDetailed(parseFloat(c.amount).toFixed(2))}</td>
           <td></td>
           <td>
             <button class="btn btn-sm" onclick="openEditTxnModal('${inv.id}','${c.id}','pf','${c.date}','','','${c.amount}')">Edit</button>
@@ -821,7 +904,7 @@ function renderTable(investments) {
     } else if (inv.type !== 'fd') {
       for (const t of (inv.transactions || []).slice().sort((a,b) => b.date.localeCompare(a.date))) {
         html += `<tr class="txn-row" data-parent="${inv.id}">
-          <td colspan="5">${t.date} &mdash; ${parseFloat(t.quantity).toFixed(2)} units @ ${fmtDetailed(t.buy_price)}</td>
+          <td colspan="6">${t.date} &mdash; ${parseFloat(t.quantity).toFixed(2)} units @ ${fmtDetailed(t.buy_price)}</td>
           <td></td>
           <td>
             <button class="btn btn-sm" onclick="openEditTxnModal('${inv.id}','${t.id}','market','${t.date}','${t.quantity}','${t.buy_price}','')">Edit</button>
@@ -831,6 +914,25 @@ function renderTable(investments) {
       }
     }
   }
+
+  // Compute XIRR for filtered total (client-side Newton's method)
+  const filteredXirr = computeXirrJS(totalXirrFlows);
+  const totGLPct = totInvested > 0 ? ((totGL / totInvested) * 100).toFixed(2) : 0;
+  const totGLClass = totGL >= 0 ? 'positive' : 'negative';
+  const totXirrStr = filteredXirr !== null ? (filteredXirr >= 0 ? '+' : '') + filteredXirr + '%' : '--';
+  const totXirrClass = filteredXirr !== null ? (filteredXirr >= 0 ? 'positive' : 'negative') : '';
+
+  html += `<tr style="border-top:2px solid var(--border);font-weight:600;">
+    <td>Total</td>
+    <td></td>
+    <td></td>
+    <td>${fmtDetailed(totInvested)}</td>
+    <td>${fmtDetailed(totValue)}</td>
+    <td class="${totGLClass}">${fmtDetailed(totGL)} (${totGLPct >= 0 ? '+' : ''}${totGLPct}%)</td>
+    <td class="${totXirrClass}">${totXirrStr}</td>
+    <td></td>
+  </tr>`;
+
   tbody.innerHTML = html;
 }
 

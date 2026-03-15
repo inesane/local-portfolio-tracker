@@ -22,7 +22,8 @@ Track stocks, mutual funds, commodities, crypto, Provident Fund contributions, a
   - **Category** — Equity, Debt, Commodities, Crypto (click a section to drill down)
   - **Detailed** — Stocks, ETFs, Mutual Funds, Gold ETFs, Crypto, PF, FD
 - **Historical allocation slider** — Scrub through time to see how your allocation breakdown changed week by week
-- Filter investments by **Current / Past / All**
+- Filter investments by **Current / Past / All** and by **asset class** (Equity, Debt, Commodities, Crypto)
+- **Per-investment XIRR** column and a **totals row** that updates based on active filters
 - Manual price refresh
 - INR default with USD conversion toggle
 
