@@ -126,4 +126,3 @@ All portfolio data is stored locally in `portfolio.json`. No data is sent to any
 - **Export** — Download portfolio data as CSV/Excel
 - **Graph Filters** - More filters on graphs to view performance over the past year, month, etc.
 - **More Investments** - Real estate, US investments (most probably in a separate sheet/tab)
-- **Dividend tracking** — Record and track dividend income from stocks and mutual funds
