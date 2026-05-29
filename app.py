@@ -844,11 +844,15 @@ def historical():
 
         # Collect all cash flows: (date, amount) for each investment
         # For zero-cost acquisitions, use market value at acquisition date
+        # Negative amounts represent exits (sells, FD maturities) to mirror total_invested
         cash_flows = []
         for inv in investments:
             inv_type = inv["type"]
             if inv_type == "fd":
                 cash_flows.append((inv["start_date"], float(inv["principal"])))
+                # "Sell" Nifty 50 units at maturity — mirrors how total_invested drops to 0 after maturity
+                if inv.get("maturity_date"):
+                    cash_flows.append((inv["maturity_date"], -float(inv["principal"])))
             elif inv_type == "pf":
                 for c in inv.get("contributions", []):
                     cash_flows.append((c["date"], float(c["amount"])))
@@ -876,11 +880,13 @@ def historical():
         # Sort cash flows by date
         cash_flows.sort(key=lambda x: x[0])
 
-        # For each cash flow, compute Nifty units bought
-        nifty_units = []  # list of (date, units)
+        # For each cash flow, compute Nifty units bought or sold
+        nifty_units = []  # list of (date, units_delta) — negative for sells/exits
         for cf_date, cf_amount in cash_flows:
+            if cf_amount == 0:
+                continue
             price = get_nifty_price(cf_date)
-            if price and price > 0 and cf_amount > 0:
+            if price and price > 0:
                 nifty_units.append((cf_date, cf_amount / price))
 
         # Portfolio Value / Returns benchmark: "what if every rupee invested went into Nifty 50?"
@@ -892,6 +898,7 @@ def historical():
             # Accumulate units from cash flows up to this date
             while cf_idx < len(nifty_units) and nifty_units[cf_idx][0] <= dp:
                 cumulative_units += nifty_units[cf_idx][1]
+                cumulative_units = max(0.0, cumulative_units)
                 cf_idx += 1
             nifty_price = get_nifty_price(dp)
             if nifty_price is not None and cumulative_units > 0:
