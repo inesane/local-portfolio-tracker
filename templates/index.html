@@ -56,6 +56,7 @@
   .inv-table tr:hover { background: var(--surface2); }
   .type-badge { padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; text-transform: uppercase; font-weight: 600; }
   .type-stock { background: rgba(59,130,246,0.15); color: var(--blue); }
+  .type-us_stock { background: rgba(59,130,246,0.2); color: var(--blue); }
   .type-etf { background: rgba(168,85,247,0.15); color: var(--purple); }
   .type-gold_etf { background: rgba(234,179,8,0.15); color: var(--yellow); }
   .type-mutual_fund { background: rgba(6,182,212,0.15); color: var(--cyan); }
@@ -241,7 +242,8 @@
     <div class="form-group">
       <label>Investment Type</label>
       <select id="invType" onchange="onTypeChange()">
-        <option value="stock">Stock (NSE/BSE)</option>
+        <option value="stock">Stock (India - NSE/BSE)</option>
+        <option value="us_stock">Stock (US - NYSE/NASDAQ)</option>
         <option value="etf">ETF</option>
         <option value="gold_etf">Gold ETF</option>
         <option value="mutual_fund">Mutual Fund</option>
@@ -265,7 +267,7 @@
       <input type="hidden" id="assetTicker">
       <div class="form-row">
         <div class="form-group"><label>Quantity</label><input type="number" id="txnQty" step="any" placeholder="0"></div>
-        <div class="form-group"><label>Buy Price (per unit)</label><input type="number" id="txnPrice" step="any" placeholder="0"></div>
+        <div class="form-group"><label id="txnPriceLabel">Buy Price (per unit)</label><input type="number" id="txnPrice" step="any" placeholder="0"></div>
       </div>
       <div class="form-group"><label>Date</label><input type="text" id="txnDate" class="datepicker" placeholder="Select date"></div>
     </div>
@@ -369,7 +371,8 @@
     <div class="form-group">
       <label>Investment Type</label>
       <select id="editInvType" onchange="onEditInvTypeChange()">
-        <option value="stock">Stock (NSE/BSE)</option>
+        <option value="stock">Stock (India - NSE/BSE)</option>
+        <option value="us_stock">Stock (US - NYSE/NASDAQ)</option>
         <option value="etf">ETF</option>
         <option value="gold_etf">Gold ETF</option>
         <option value="mutual_fund">Mutual Fund</option>
@@ -538,11 +541,11 @@ const CATEGORY_COLORS = {
   mutual_fund: '#06b6d4', crypto: '#f97316', pf: '#22c55e', fd: '#ec4899'
 };
 const CATEGORY_LABELS = {
-  stock: 'Stocks', etf: 'ETFs', gold_etf: 'Gold ETFs',
+  stock: 'Stocks', us_stock: 'US Stocks', etf: 'ETFs', gold_etf: 'Gold ETFs',
   mutual_fund: 'Mutual Funds', crypto: 'Crypto', pf: 'Provident Fund', fd: 'Fixed Deposits'
 };
 const BROAD_CATEGORY_MAP = {
-  stock: 'equity', etf: 'equity', mutual_fund: 'equity',
+  stock: 'equity', us_stock: 'equity', etf: 'equity', mutual_fund: 'equity',
   gold_etf: 'commodities', crypto: 'crypto', pf: 'debt', fd: 'debt'
 };
 const BROAD_CATEGORY_LABELS = {
@@ -646,7 +649,7 @@ function renderPortfolio() {
   renderTable(d.investments);
 }
 
-const DETAILED_ORDER = ['stock', 'etf', 'mutual_fund', 'gold_etf', 'crypto', 'pf', 'fd'];
+const DETAILED_ORDER = ['stock', 'us_stock', 'etf', 'mutual_fund', 'gold_etf', 'crypto', 'pf', 'fd'];
 const CATEGORY_ORDER = ['equity', 'commodities', 'crypto', 'debt'];
 
 function renderPieChart(investments, isHistorical) {
@@ -1231,14 +1234,22 @@ function closeModal() {
 
 function onTypeChange() {
   const t = document.getElementById('invType').value;
-  document.getElementById('marketFields').style.display = ['stock','etf','gold_etf','mutual_fund','crypto'].includes(t) ? 'block' : 'none';
+  document.getElementById('marketFields').style.display = ['stock','us_stock','etf','gold_etf','mutual_fund','crypto'].includes(t) ? 'block' : 'none';
   document.getElementById('pfFields').style.display = t === 'pf' ? 'block' : 'none';
   document.getElementById('fdFields').style.display = t === 'fd' ? 'block' : 'none';
 
   const sl = document.getElementById('searchLabel');
   if (t === 'mutual_fund') sl.textContent = 'Search Mutual Fund';
   else if (t === 'crypto') sl.textContent = 'Search Cryptocurrency';
+  else if (t === 'us_stock') sl.textContent = 'Search US Stock (NYSE/NASDAQ)';
   else sl.textContent = 'Search Ticker (e.g. RELIANCE, NIFTYBEES)';
+
+  const pl = document.getElementById('txnPriceLabel');
+  if (pl) pl.textContent = t === 'us_stock' ? 'Buy Price (USD per unit)' : 'Buy Price (per unit)';
+
+  if (t === 'us_stock' && usdRate === 83) {
+    fetch('/api/exchange-rate').then(r => r.json()).then(d => { usdRate = d.usd_inr; });
+  }
 
   document.getElementById('searchResults').style.display = 'none';
   document.getElementById('searchInput').value = '';
@@ -1259,6 +1270,7 @@ async function doSearch() {
   let url;
   if (t === 'mutual_fund') url = `/api/search/mf?q=${encodeURIComponent(q)}`;
   else if (t === 'crypto') url = `/api/search/crypto?q=${encodeURIComponent(q)}`;
+  else if (t === 'us_stock') url = `/api/search/us_stock?q=${encodeURIComponent(q)}`;
   else url = `/api/search/stock?q=${encodeURIComponent(q)}`;
 
   try {
@@ -1326,6 +1338,15 @@ async function submitInvestment() {
       date: document.getElementById('txnDate').value,
       quantity: document.getElementById('txnQty').value,
       buy_price: document.getElementById('txnPrice').value
+    };
+  } else if (t === 'us_stock') {
+    body.name = document.getElementById('assetName').value;
+    body.ticker = document.getElementById('assetTicker').value || document.getElementById('searchInput').value.toUpperCase();
+    const usdPrice = parseFloat(document.getElementById('txnPrice').value) || 0;
+    body.transaction = {
+      date: document.getElementById('txnDate').value,
+      quantity: document.getElementById('txnQty').value,
+      buy_price: (usdPrice * usdRate).toFixed(2)
     };
   } else if (t === 'mutual_fund') {
     body.name = document.getElementById('assetName').value;
@@ -1494,7 +1515,7 @@ function onEditInvTypeChange() {
   ['editInvStockFields','editInvMfFields','editInvCryptoFields','editInvPfFields','editInvFdFields'].forEach(function(id) {
     document.getElementById(id).style.display = 'none';
   });
-  if (['stock','etf','gold_etf'].includes(t)) {
+  if (['stock','us_stock','etf','gold_etf'].includes(t)) {
     document.getElementById('editInvStockFields').style.display = 'block';
   } else if (t === 'mutual_fund') {
     document.getElementById('editInvMfFields').style.display = 'block';
@@ -1516,7 +1537,7 @@ async function submitEditInvestment() {
   var invType = document.getElementById('editInvType').value;
   var body = { name: document.getElementById('editInvName').value, type: invType, category: invType };
 
-  if (['stock','etf','gold_etf'].includes(invType)) {
+  if (['stock','us_stock','etf','gold_etf'].includes(invType)) {
     body.ticker = document.getElementById('editInvTicker').value;
   } else if (invType === 'mutual_fund') {
     body.scheme_code = document.getElementById('editInvSchemeCode').value;
@@ -1679,7 +1700,7 @@ function openRecurringModal() {
   sel.innerHTML = '';
   if (portfolioData && portfolioData.investments) {
     for (var inv of portfolioData.investments) {
-      if (['pf', 'stock', 'etf', 'gold_etf', 'mutual_fund', 'crypto'].includes(inv.type)) {
+      if (['pf', 'stock', 'us_stock', 'etf', 'gold_etf', 'mutual_fund', 'crypto'].includes(inv.type)) {
         var opt = document.createElement('option');
         opt.value = inv.id;
         opt.textContent = inv.name + ' (' + (CATEGORY_LABELS[inv.type] || inv.type) + ')';

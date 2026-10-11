@@ -86,7 +86,7 @@ def get_current_price(inv):
     price = None
     inv_type = inv["type"]
 
-    if inv_type in ("stock", "etf", "gold_etf"):
+    if inv_type in ("stock", "etf", "gold_etf", "us_stock"):
         ticker = inv["ticker"]
         chart = yahoo_chart(ticker, period="5d")
         if chart:
@@ -96,6 +96,8 @@ def get_current_price(inv):
                 closes = [c for c in closes if c is not None]
                 if closes:
                     price = closes[-1]
+        if inv_type == "us_stock" and price is not None:
+            price = float(price) * get_usd_inr_rate()
 
     elif inv_type == "mutual_fund":
         scheme_code = inv["scheme_code"]
@@ -185,15 +187,16 @@ def get_historical_prices(inv, start_date, end_date=None):
     prices = {}
     inv_type = inv["type"]
 
-    if inv_type in ("stock", "etf", "gold_etf"):
+    if inv_type in ("stock", "etf", "gold_etf", "us_stock"):
         chart = yahoo_chart(inv["ticker"], interval="1d", range_start=start_date, range_end=end_date)
         if chart:
             timestamps = chart.get("timestamp", [])
             closes = chart.get("indicators", {}).get("quote", [{}])[0].get("close", [])
+            usd_inr = get_usd_inr_rate() if inv_type == "us_stock" else 1.0
             for i, ts in enumerate(timestamps):
                 if i < len(closes) and closes[i] is not None:
                     d = datetime.fromtimestamp(ts).strftime("%Y-%m-%d")
-                    prices[d] = float(closes[i])
+                    prices[d] = float(closes[i]) * usd_inr
 
     elif inv_type == "mutual_fund":
         try:
@@ -480,7 +483,7 @@ def _find_existing(investments, inv_type, data):
     for inv in investments:
         if inv["type"] != inv_type:
             continue
-        if inv_type in ("stock", "etf", "gold_etf") and inv.get("ticker") == data.get("ticker"):
+        if inv_type in ("stock", "etf", "gold_etf", "us_stock") and inv.get("ticker") == data.get("ticker"):
             return inv
         if inv_type == "mutual_fund" and inv.get("scheme_code") == data.get("scheme_code"):
             return inv
@@ -500,7 +503,7 @@ def add_investment():
     # Check if this investment already exists — if so, append transaction
     existing = _find_existing(portfolio.get("investments", []), inv_type, data)
 
-    if existing and inv_type in ("stock", "etf", "gold_etf", "mutual_fund", "crypto"):
+    if existing and inv_type in ("stock", "etf", "gold_etf", "us_stock", "mutual_fund", "crypto"):
         if data.get("transaction"):
             t = data["transaction"]
             t["id"] = str(uuid.uuid4())[:8]
@@ -522,7 +525,7 @@ def add_investment():
     inv_id = str(uuid.uuid4())[:8]
     investment = {"id": inv_id, "type": inv_type, "name": data["name"], "category": data.get("category", inv_type)}
 
-    if inv_type in ("stock", "etf", "gold_etf"):
+    if inv_type in ("stock", "etf", "gold_etf", "us_stock"):
         investment["ticker"] = data["ticker"]
         investment["transactions"] = []
         if data.get("transaction"):
@@ -592,7 +595,7 @@ def edit_investment(inv_id):
             inv_type = inv["type"]
 
             # Update type-specific fields
-            if inv_type in ("stock", "etf", "gold_etf"):
+            if inv_type in ("stock", "etf", "gold_etf", "us_stock"):
                 if data.get("ticker"):
                     inv["ticker"] = data["ticker"]
                 inv.setdefault("transactions", [])
@@ -722,7 +725,7 @@ def historical():
     # Fetch historical prices for all market investments
     hist_prices = {}
     for inv in investments:
-        if inv["type"] in ("stock", "etf", "gold_etf", "mutual_fund", "crypto"):
+        if inv["type"] in ("stock", "etf", "gold_etf", "us_stock", "mutual_fund", "crypto"):
             hist_prices[inv["id"]] = get_historical_prices(inv, start_date, end_date)
 
     # Generate weekly date points
@@ -942,7 +945,7 @@ def historical_allocation():
     # Fetch historical prices for all market investments
     hist_prices = {}
     for inv in investments:
-        if inv["type"] in ("stock", "etf", "gold_etf", "mutual_fund", "crypto"):
+        if inv["type"] in ("stock", "etf", "gold_etf", "us_stock", "mutual_fund", "crypto"):
             hist_prices[inv["id"]] = get_historical_prices(inv, start_date, end_date)
 
     # Generate weekly date points
@@ -1028,6 +1031,36 @@ def search_stock():
         return jsonify(results)
     except Exception as e:
         print("Stock search error: {}".format(e))
+        return jsonify([])
+
+
+@app.route("/api/search/us_stock")
+def search_us_stock():
+    q = request.args.get("q", "")
+    if len(q) < 1:
+        return jsonify([])
+    try:
+        url = "https://query1.finance.yahoo.com/v1/finance/search?q={}&quotesCount=15&newsCount=0".format(q)
+        data = yahoo_fetch(url)
+        if not data:
+            return jsonify([])
+        quotes = data.get("quotes", [])
+        results = []
+        US_EXCHANGES = {"NMS", "NYQ", "NGM", "NCM", "ASE", "PCX", "BATS"}
+        for quote in quotes:
+            exch = quote.get("exchange", "")
+            symbol = quote.get("symbol", "")
+            # US stocks have no dot suffix and come from US exchanges
+            if exch in US_EXCHANGES and "." not in symbol:
+                exchange_label = "NASDAQ" if exch in ("NMS", "NGM", "NCM") else "NYSE"
+                results.append({
+                    "ticker": symbol,
+                    "name": quote.get("longname") or quote.get("shortname") or symbol,
+                    "exchange": exchange_label,
+                })
+        return jsonify(results)
+    except Exception as e:
+        print("US stock search error: {}".format(e))
         return jsonify([])
 
 
