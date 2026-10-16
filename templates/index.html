@@ -183,7 +183,7 @@
             <input type="checkbox" id="benchmarkToggle" checked onchange="loadHistorical()"> Nifty 50
           </label>
           <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;color:var(--muted);">
-            <input type="checkbox" id="debtBenchmarkToggle" onchange="loadHistorical()"> 7% Debt
+            <input type="checkbox" id="debtBenchmarkToggle" onchange="loadHistorical()"> Debt (7%)
           </label>
           <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;color:var(--muted);">
             <input type="checkbox" id="inflationToggle" onchange="loadHistorical()"> Inflation Adjusted
@@ -1105,7 +1105,7 @@ function renderLineChart(data) {
       return ((v - inv) / inv) * 100;
     });
     return {
-      label: '7% Debt',
+      label: 'Debt (7%)',
       data: returns,
       borderColor: '#10b981',
       backgroundColor: 'transparent',
@@ -1122,7 +1122,7 @@ function renderLineChart(data) {
     if (!hasDebtBenchmark) return null;
     const values = data.debt_benchmark.map(v => v !== null ? convert(v) : null);
     return {
-      label: '7% Debt',
+      label: 'Debt (7%)',
       data: values,
       borderColor: '#10b981',
       backgroundColor: 'transparent',
