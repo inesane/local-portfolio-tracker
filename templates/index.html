@@ -183,6 +183,9 @@
             <input type="checkbox" id="benchmarkToggle" checked onchange="loadHistorical()"> Nifty 50
           </label>
           <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;color:var(--muted);">
+            <input type="checkbox" id="debtBenchmarkToggle" onchange="loadHistorical()"> 7% Debt
+          </label>
+          <label style="display:flex;align-items:center;gap:4px;font-size:0.8rem;color:var(--muted);">
             <input type="checkbox" id="inflationToggle" onchange="loadHistorical()"> Inflation Adjusted
           </label>
         </div>
@@ -1008,8 +1011,9 @@ async function loadHistorical() {
   loading.style.display = 'flex';
   const inflation = document.getElementById('inflationToggle').checked;
   const benchmark = document.getElementById('benchmarkToggle').checked;
+  const debtBenchmark = document.getElementById('debtBenchmarkToggle').checked;
   try {
-    const data = await api(`/api/historical?view=${histView}&inflation=${inflation}&benchmark=${benchmark}`);
+    const data = await api(`/api/historical?view=${histView}&inflation=${inflation}&benchmark=${benchmark}&debt_benchmark=${debtBenchmark}`);
     histDataCache = data;
     renderLineChart(filterByTimeRange(data));
   } catch(e) {
@@ -1030,6 +1034,7 @@ function filterByTimeRange(data) {
   if (data.values) filtered.values = data.values.slice(startIdx);
   if (data.invested) filtered.invested = data.invested.slice(startIdx);
   if (data.benchmark) filtered.benchmark = data.benchmark.slice(startIdx);
+  if (data.debt_benchmark) filtered.debt_benchmark = data.debt_benchmark.slice(startIdx);
   return filtered;
 }
 
@@ -1050,9 +1055,9 @@ function renderLineChart(data) {
   const convert = v => currency === 'USD' ? v / usdRate : v;
   const showInvested = document.getElementById('investedToggle').checked;
   const hasBenchmark = data.benchmark && data.benchmark.some(v => v !== null);
+  const hasDebtBenchmark = data.debt_benchmark && data.debt_benchmark.some(v => v !== null);
 
   // Benchmark = "what if all invested money went into Nifty 50 instead"
-  // Backend returns simulated portfolio value, so we can use it directly or derive returns
   function benchmarkReturnDataset() {
     if (!hasBenchmark) return null;
     const returns = data.benchmark.map((v, i) => {
@@ -1091,6 +1096,45 @@ function renderLineChart(data) {
     };
   }
 
+  // Debt benchmark = "what if every rupee earned 7% p.a."
+  function debtBenchmarkReturnDataset() {
+    if (!hasDebtBenchmark) return null;
+    const returns = data.debt_benchmark.map((v, i) => {
+      const inv = data.invested[i];
+      if (v === null || !inv || inv <= 0) return null;
+      return ((v - inv) / inv) * 100;
+    });
+    return {
+      label: '7% Debt',
+      data: returns,
+      borderColor: '#10b981',
+      backgroundColor: 'transparent',
+      borderDash: [4, 4],
+      fill: false,
+      tension: 0.3,
+      pointRadius: 0,
+      borderWidth: 2,
+      spanGaps: true
+    };
+  }
+
+  function debtBenchmarkValueDataset() {
+    if (!hasDebtBenchmark) return null;
+    const values = data.debt_benchmark.map(v => v !== null ? convert(v) : null);
+    return {
+      label: '7% Debt',
+      data: values,
+      borderColor: '#10b981',
+      backgroundColor: 'transparent',
+      borderDash: [4, 4],
+      fill: false,
+      tension: 0.3,
+      pointRadius: 0,
+      borderWidth: 2,
+      spanGaps: true
+    };
+  }
+
   if (histView === 'returns') {
     const returns = data.values.map((v, i) => {
       const inv = data.invested[i];
@@ -1116,6 +1160,8 @@ function renderLineChart(data) {
     }];
     const bmDs = benchmarkReturnDataset();
     if (bmDs) datasets.push(bmDs);
+    const debtDs = debtBenchmarkReturnDataset();
+    if (debtDs) datasets.push(debtDs);
 
     lineChart = new Chart(ctx, {
       type: 'line',
@@ -1131,7 +1177,7 @@ function renderLineChart(data) {
           }
         },
         plugins: {
-          legend: { display: bmDs ? true : false, labels: { color: '#d1d5db', usePointStyle: true, pointStyle: 'line', font: { size: 11 } } },
+          legend: { display: !!(bmDs || debtDs), labels: { color: '#d1d5db', usePointStyle: true, pointStyle: 'line', font: { size: 11 } } },
           tooltip: {
             callbacks: {
               label: ctx => {
@@ -1215,6 +1261,8 @@ function renderLineChart(data) {
     }
     const bmDs = benchmarkValueDataset();
     if (bmDs) datasets.push(bmDs);
+    const debtDs = debtBenchmarkValueDataset();
+    if (debtDs) datasets.push(debtDs);
 
     const hasMultiple = datasets.length > 1;
     lineChart = new Chart(ctx, {

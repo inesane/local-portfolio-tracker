@@ -945,6 +945,7 @@ def historical():
     view = request.args.get("view", "value")  # "value", "returns", or "current"
     use_inflation = request.args.get("inflation", "false") == "true"
     use_benchmark = request.args.get("benchmark", "false") == "true"
+    use_debt_benchmark = request.args.get("debt_benchmark", "false") == "true"
 
     portfolio = load_portfolio()
     investments = valid_investments(portfolio)
@@ -1067,19 +1068,19 @@ def historical():
 
     result = {"dates": date_points, "values": values, "invested": invested_values}
 
-    # Add Nifty 50 benchmark data if requested
-    # Simulates: "what if every rupee invested went into Nifty 50 instead?"
-    if use_benchmark and date_points:
-        nifty_inv = {"id": "_nifty50", "type": "stock", "ticker": "^NSEI"}
-        nifty_prices = get_historical_prices(nifty_inv, date_points[0], date_points[-1])
+    # Build cash flows once for any benchmark that needs them
+    if (use_benchmark or use_debt_benchmark) and date_points:
+        if use_benchmark:
+            nifty_inv = {"id": "_nifty50", "type": "stock", "ticker": "^NSEI"}
+            nifty_prices = get_historical_prices(nifty_inv, date_points[0], date_points[-1])
 
-        def get_nifty_price(date_str):
-            dt = datetime.strptime(date_str, "%Y-%m-%d")
-            for offset in range(7):
-                check = (dt - timedelta(days=offset)).strftime("%Y-%m-%d")
-                if check in nifty_prices:
-                    return nifty_prices[check]
-            return None
+            def get_nifty_price(date_str):
+                dt = datetime.strptime(date_str, "%Y-%m-%d")
+                for offset in range(7):
+                    check = (dt - timedelta(days=offset)).strftime("%Y-%m-%d")
+                    if check in nifty_prices:
+                        return nifty_prices[check]
+                return None
 
         # Collect all cash flows: (date, amount) for each investment
         # For zero-cost acquisitions, use market value at acquisition date
@@ -1119,32 +1120,54 @@ def historical():
         # Sort cash flows by date
         cash_flows.sort(key=lambda x: x[0])
 
-        # For each cash flow, compute Nifty units bought or sold
-        nifty_units = []  # list of (date, units_delta) — negative for sells/exits
-        for cf_date, cf_amount in cash_flows:
-            if cf_amount == 0:
-                continue
-            price = get_nifty_price(cf_date)
-            if price and price > 0:
-                nifty_units.append((cf_date, cf_amount / price))
+        # --- Nifty 50 benchmark ---
+        if use_benchmark:
+            nifty_units = []  # list of (date, units_delta) — negative for sells/exits
+            for cf_date, cf_amount in cash_flows:
+                if cf_amount == 0:
+                    continue
+                price = get_nifty_price(cf_date)
+                if price and price > 0:
+                    nifty_units.append((cf_date, cf_amount / price))
 
         # Portfolio Value / Returns benchmark: "what if every rupee invested went into Nifty 50?"
         # For each date point, sum units accumulated so far × current Nifty price
-        benchmark_values = []
-        cf_idx = 0
-        cumulative_units = 0.0
-        for dp in date_points:
-            # Accumulate units from cash flows up to this date
-            while cf_idx < len(nifty_units) and nifty_units[cf_idx][0] <= dp:
-                cumulative_units += nifty_units[cf_idx][1]
-                cumulative_units = max(0.0, cumulative_units)
-                cf_idx += 1
-            nifty_price = get_nifty_price(dp)
-            if nifty_price is not None and cumulative_units > 0:
-                benchmark_values.append(round(cumulative_units * nifty_price * adj(dp), 2))
-            else:
-                benchmark_values.append(None)
-        result["benchmark"] = benchmark_values
+        if use_benchmark:
+            benchmark_values = []
+            cf_idx = 0
+            cumulative_units = 0.0
+            for dp in date_points:
+                while cf_idx < len(nifty_units) and nifty_units[cf_idx][0] <= dp:
+                    cumulative_units += nifty_units[cf_idx][1]
+                    cumulative_units = max(0.0, cumulative_units)
+                    cf_idx += 1
+                nifty_price = get_nifty_price(dp)
+                if nifty_price is not None and cumulative_units > 0:
+                    benchmark_values.append(round(cumulative_units * nifty_price * adj(dp), 2))
+                else:
+                    benchmark_values.append(None)
+            result["benchmark"] = benchmark_values
+
+        # --- Debt benchmark ---
+        # "What if every rupee invested earned 7% p.a. (FD / debt rate)?"
+        # Each cash flow compounds independently from its investment date.
+        if use_debt_benchmark:
+            DEBT_RATE = 0.07
+            debt_flows = [(datetime.strptime(d, "%Y-%m-%d"), a) for d, a in cash_flows]
+            active_debt = []
+            debt_cf_idx = 0
+            debt_values = []
+            for dp in date_points:
+                dp_dt = datetime.strptime(dp, "%Y-%m-%d")
+                while debt_cf_idx < len(debt_flows) and debt_flows[debt_cf_idx][0] <= dp_dt:
+                    active_debt.append(debt_flows[debt_cf_idx])
+                    debt_cf_idx += 1
+                total_debt = sum(
+                    amt * ((1 + DEBT_RATE) ** ((dp_dt - cf_dt).days / 365.25))
+                    for cf_dt, amt in active_debt
+                )
+                debt_values.append(round(total_debt * adj(dp), 2) if total_debt > 0 else None)
+            result["debt_benchmark"] = debt_values
 
     return jsonify(result)
 
