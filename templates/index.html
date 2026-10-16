@@ -1946,9 +1946,11 @@ document.querySelectorAll('.datepicker').forEach(function(el) {
   flatpickr(el, (el.id === 'fdMaturity' || el.id === 'editInvFdMaturity') ? fpFutureConfig : fpConfig);
 });
 
-// Init
-loadPortfolio();
-loadHistorical();
+// Init — clear price cache on every page load so Ctrl+R always fetches fresh prices
+fetch('/api/refresh', { method: 'POST' }).then(() => {
+  loadPortfolio();
+  loadHistorical();
+});
 </script>
 </body>
 </html>
