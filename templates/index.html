@@ -55,6 +55,11 @@
   .inv-table th { text-align: left; padding: 10px 12px; font-size: 0.75rem; color: var(--muted); text-transform: uppercase; border-bottom: 1px solid var(--border); }
   .inv-table td { padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 0.85rem; }
   .inv-table tr:hover { background: var(--surface2); }
+  .inv-table th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+  .inv-table th.sortable:hover, .inv-table th.sorted { color: var(--text); }
+  .inv-table th.sortable::after { content: '\2195'; margin-left: 4px; opacity: 0.35; }
+  .inv-table th.sorted[data-dir="desc"]::after { content: '\2193'; opacity: 1; }
+  .inv-table th.sorted[data-dir="asc"]::after { content: '\2191'; opacity: 1; }
   .type-badge { padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; text-transform: uppercase; font-weight: 600; }
   .type-stock { background: rgba(59,130,246,0.15); color: var(--blue); }
   .type-us_stock { background: rgba(59,130,246,0.2); color: var(--blue); }
@@ -228,8 +233,12 @@
       <table class="inv-table" id="invTable">
         <thead>
           <tr>
-            <th>Name</th><th>Type</th><th>Quantity</th><th>Invested</th>
-            <th>Current Value</th><th>Gain/Loss</th><th>XIRR</th><th style="text-align:right;">Actions</th>
+            <th>Name</th><th>Type</th><th>Quantity</th>
+            <th class="sortable" data-sort="invested" onclick="setInvSort('invested')">Invested</th>
+            <th class="sortable" data-sort="current_value" onclick="setInvSort('current_value')">Current Value</th>
+            <th class="sortable" data-sort="gain_loss" onclick="setInvSort('gain_loss')">Gain/Loss</th>
+            <th class="sortable" data-sort="xirr" onclick="setInvSort('xirr')">XIRR</th>
+            <th style="text-align:right;">Actions</th>
           </tr>
         </thead>
         <tbody id="invBody"></tbody>
@@ -538,6 +547,8 @@ let histTimeRange = 'MAX';
 let histDataCache = null;
 let invFilter = 'current';
 let classFilter = 'all';
+let invSortKey = null;   // invested | current_value | gain_loss | xirr
+let invSortDir = 'desc';
 let searchTimeout = null;
 
 const CATEGORY_COLORS = {
@@ -871,12 +882,37 @@ function setClassFilter(filter, btn) {
   renderPortfolio();
 }
 
+// Click cycles: descending -> ascending -> original order
+function setInvSort(key) {
+  if (invSortKey !== key) { invSortKey = key; invSortDir = 'desc'; }
+  else if (invSortDir === 'desc') invSortDir = 'asc';
+  else invSortKey = null;
+  renderPortfolio();
+}
+
+function sortInvestments(list) {
+  document.querySelectorAll('#invTable th.sortable').forEach(function(th) {
+    const active = th.dataset.sort === invSortKey;
+    th.classList.toggle('sorted', active);
+    if (active) th.dataset.dir = invSortDir; else delete th.dataset.dir;
+  });
+  if (!invSortKey) return list;
+  const sign = invSortDir === 'asc' ? 1 : -1;
+  return list.slice().sort(function(a, b) {
+    const av = a[invSortKey], bv = b[invSortKey];
+    const aMissing = av === null || av === undefined, bMissing = bv === null || bv === undefined;
+    // Missing values (e.g. no XIRR) always sink to the bottom
+    if (aMissing || bMissing) return aMissing - bMissing;
+    return sign * (parseFloat(av) - parseFloat(bv));
+  });
+}
+
 function renderTable(investments) {
   const tbody = document.getElementById('invBody');
   const empty = document.getElementById('emptyState');
 
   // Filter investments based on selected view and asset class
-  const filtered = investments.filter(function(inv) {
+  const filtered = sortInvestments(investments.filter(function(inv) {
     if (invFilter !== 'all') {
       var isCurrent = isCurrentInvestment(inv);
       if (invFilter === 'current' ? !isCurrent : isCurrent) return false;
@@ -886,7 +922,7 @@ function renderTable(investments) {
       if (broad !== classFilter) return false;
     }
     return true;
-  });
+  }));
 
   if (filtered.length === 0) {
     tbody.innerHTML = '';
